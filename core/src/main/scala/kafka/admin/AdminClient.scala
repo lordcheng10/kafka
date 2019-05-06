@@ -13,6 +13,7 @@
 package kafka.admin
 
 import java.nio.ByteBuffer
+import java.util
 import java.util.{Collections, Properties}
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -27,10 +28,9 @@ import org.apache.kafka.common.config.{AbstractConfig, ConfigDef}
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.network.Selector
 import org.apache.kafka.common.protocol.{ApiKeys, Errors}
-import org.apache.kafka.common.requests._
-import org.apache.kafka.common.requests.OffsetFetchResponse
+import org.apache.kafka.common.requests.{GetStartOffsetRequest, OffsetFetchResponse, _}
 import org.apache.kafka.common.utils.{Time, Utils}
-import org.apache.kafka.common.{Cluster, Node, TopicPartition}
+import org.apache.kafka.common.{Cluster, NewOffsetMetaData, Node, TopicPartition}
 
 import scala.collection.JavaConverters._
 import scala.util.Try
@@ -130,6 +130,15 @@ class AdminClient(val time: Time,
       throw response.error.exception
     response.maybeThrowFirstPartitionError
     response.responseData.asScala.map { case (tp, partitionData) => (tp, partitionData.offset) }.toMap
+  }
+
+  def getStartOffset(broker: Node, partitionOffsetMetaDatas: util.LinkedHashMap[TopicPartition, NewOffsetMetaData]):
+  Map[TopicPartition, GetStartOffsetResponse.StartOffsetResponse] = {
+    val response = send(broker, ApiKeys.GET_START_OFFSET, new GetStartOffsetRequest.Builder(partitionOffsetMetaDatas)).asInstanceOf[GetStartOffsetResponse]
+    debug("AdminClient getStartOffset=" + response.responses())
+    response.responses().asScala.map( response =>
+      (response._1 -> new GetStartOffsetResponse.StartOffsetResponse(response._2.error, response._2.baseOffset))
+    ).toMap
   }
 
   def listAllBrokerVersionInfo(): Map[Node, Try[NodeApiVersions]] =

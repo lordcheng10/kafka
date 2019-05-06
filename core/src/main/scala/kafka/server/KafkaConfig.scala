@@ -24,10 +24,11 @@ import kafka.cluster.EndPoint
 import kafka.consumer.ConsumerConfig
 import kafka.coordinator.OffsetConfig
 import kafka.message.{BrokerCompressionCodec, CompressionCodec, Message, MessageSet}
+import kafka.server.KafkaConfig.{ReplicaIsrEntryISRMaxLagDoc, ReplicaIsrLstEntryTimeMaxMsDoc, updateLeaderOffsetIntervalMsDoc, _}
 import kafka.utils.CoreUtils
 import org.apache.kafka.clients.CommonClientConfigs
 import org.apache.kafka.common.config.ConfigDef.ValidList
-import org.apache.kafka.common.config.{AbstractConfig, ConfigDef, ConfigException, SaslConfigs, SslConfigs}
+import org.apache.kafka.common.config._
 import org.apache.kafka.common.metrics.{MetricsReporter, Sensor}
 import org.apache.kafka.common.network.ListenerName
 import org.apache.kafka.common.protocol.SecurityProtocol
@@ -38,6 +39,14 @@ import scala.collection.{Map, immutable}
 import scala.collection.JavaConverters._
 
 object Defaults {
+
+  /** ********* SmartExtend Configuration ***********/
+  val getStartOffsetMaxRetries = 10
+  val sentOffsetMetaDataIntervalMs = 30 * 1000L
+  val updateLeaderOffsetIntervalMs = 30 * 1000L
+
+
+
   /** ********* Zookeeper Configuration ***********/
   val ZkSessionTimeoutMs = 6000
   val ZkSyncTimeMs = 2000
@@ -204,6 +213,20 @@ object KafkaConfig {
     System.out.println(configDef.toHtmlTable)
   }
 
+  /** ********* SmartExtendManager Configuration ***********/
+  val BootstarpServersProp = "bootstrap.servers"
+  val getStartOffsetretriesProp = "getstartoffset.max.retries.num"
+  val SmartExtendEnableProp = "smart.extend.enable"
+  val ReplicaExpriedMaxMsProp = "replica.trunclog.expried.ms"
+  val ReplicaLstTimeMaxMsProp = "replica.trunclog.lag"
+  val sentOffsetMetaDataIntervalMsProp = "sent.offset.metadata.check.interval.ms"
+  val updateLeaderOffsetIntervalMsProp = "leader.update.offset.check.interval.ms"
+  val ReplicaIsrLstEntryTimeMaxMsProp = "replica.entry.isr.lst.lag.ms"
+  val ReplicaIsrEntryISRMaxLagProp= "replica.entry.isr.lso.lag"
+
+
+
+
   /** ********* Zookeeper Configuration ***********/
   val ZkConnectProp = "zookeeper.connect"
   val ZkSessionTimeoutMsProp = "zookeeper.session.timeout.ms"
@@ -369,6 +392,20 @@ object KafkaConfig {
   val SaslKerberosPrincipalToLocalRulesProp = SaslConfigs.SASL_KERBEROS_PRINCIPAL_TO_LOCAL_RULES
 
   /* Documentation */
+  /** ********* SmartExtendManager Configuration ***********/
+  val SmartExtendEnableDoc = "enable SmartExtend RPC?"
+  val getStartOffsetretriesDoc = "get start offset max retries"
+  val BootstarpServersDoc = "Bootstarp Server string for smart extend cluster"
+  val ReplicaLstTimeMaxMsPropDoc = "return HW or LEO?"
+  val sentOffsetMetaDataIntervalMsDoc = "sent offset metadata interval"
+  val updateLeaderOffsetIntervalMsDoc = "leader update offset interval"
+  val ReplicaIsrLstEntryTimeMaxMsDoc = "Is entry ISR(lst)?"
+  val ReplicaIsrEntryISRMaxLagDoc = "Is entry ISR(lso)"
+
+
+
+
+
   /** ********* Zookeeper Configuration ***********/
   val ZkConnectDoc = "Zookeeper host string"
   val ZkSessionTimeoutMsDoc = "Zookeeper session timeout"
@@ -611,6 +648,18 @@ object KafkaConfig {
 
     new ConfigDef()
 
+      /** ********* SmartExtendManager Configuration ***********/
+      .define(BootstarpServersProp, STRING, HIGH, BootstarpServersDoc)
+      .define(getStartOffsetretriesProp, INT, Defaults.getStartOffsetMaxRetries, HIGH, getStartOffsetretriesDoc)
+      .define(SmartExtendEnableProp, BOOLEAN, HIGH, SmartExtendEnableDoc)
+      .define(ReplicaExpriedMaxMsProp, LONG, HIGH, ReplicaLstTimeMaxMsPropDoc)
+      .define(ReplicaLstTimeMaxMsProp, LONG, HIGH, ReplicaLstTimeMaxMsPropDoc)
+      .define(sentOffsetMetaDataIntervalMsProp, LONG, Defaults.sentOffsetMetaDataIntervalMs, HIGH, sentOffsetMetaDataIntervalMsDoc)
+      .define(updateLeaderOffsetIntervalMsProp, LONG, Defaults.updateLeaderOffsetIntervalMs, HIGH, updateLeaderOffsetIntervalMsDoc)
+      .define(ReplicaIsrLstEntryTimeMaxMsProp, LONG, HIGH, ReplicaIsrLstEntryTimeMaxMsDoc)
+      .define(ReplicaIsrEntryISRMaxLagProp, LONG, HIGH, ReplicaIsrEntryISRMaxLagDoc)
+
+
       /** ********* Zookeeper Configuration ***********/
       .define(ZkConnectProp, STRING, HIGH, ZkConnectDoc)
       .define(ZkSessionTimeoutMsProp, INT, Defaults.ZkSessionTimeoutMs, HIGH, ZkSessionTimeoutMsDoc)
@@ -811,6 +860,21 @@ object KafkaConfig {
 class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean) extends AbstractConfig(KafkaConfig.configDef, props, doLog) {
 
   def this(props: java.util.Map[_, _]) = this(props, true)
+
+  /** ********* SmartExtendManager Configuration ***********/
+  val bootstarpServers : String = getString(KafkaConfig.BootstarpServersProp)
+  val getStartOffsetRetries: Int = getInt(KafkaConfig.getStartOffsetretriesProp)
+  val smartExtendEnable: Boolean = getBoolean(KafkaConfig.SmartExtendEnableProp)
+  val replicaExpriedMaxMs: Long = getLong(KafkaConfig.ReplicaExpriedMaxMsProp)
+  val replicaLstTimeMaxMs: Long = getLong(KafkaConfig.ReplicaLstTimeMaxMsProp)
+  val sentOffsetMetaDataIntervalMs: Long = getLong(KafkaConfig.sentOffsetMetaDataIntervalMsProp)
+  val updateLeaderOffsetIntervalMs: Long = getLong(KafkaConfig.updateLeaderOffsetIntervalMsProp)
+  val replicaIsrLstEntryTimeMaxMs: Long = getLong(KafkaConfig.ReplicaIsrLstEntryTimeMaxMsProp)
+  val ReplicaIsrEntryISRMaxLag: Long = getLong(KafkaConfig.ReplicaIsrEntryISRMaxLagProp)
+
+
+
+
 
   /** ********* Zookeeper Configuration ***********/
   val zkConnect: String = getString(KafkaConfig.ZkConnectProp)
