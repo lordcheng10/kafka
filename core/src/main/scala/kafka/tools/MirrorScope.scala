@@ -14,27 +14,29 @@ import org.apache.kafka.clients.consumer.{ConsumerConfig, KafkaConsumer}
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord}
 import org.apache.kafka.common.TopicPartition
 
+import scala.util.control.Breaks.{break, breakable}
+
 object MirrorScope {
 
   def main(args: Array[String]): Unit = {
     val parser = new OptionParser(false)
-    val scTopic = parser.accepts("scTopic", "The topic  to consume ")
+    val srcTopicOpt = parser.accepts("srcTopic", "source topic")
       .withRequiredArg
-      .describedAs("scTopic")
+      .describedAs("srcTopic")
       .ofType(classOf[String])
-    val srcBoostServer = parser.accepts("srcBoostServer", "srcBoostServer")
+    val srcBoostServerOpt = parser.accepts("srcBoostServer", "srcBoostServer")
       .withRequiredArg
       .describedAs("srcBoostServer")
       .ofType(classOf[String])
-    val groupId = parser.accepts("groupId", "groupId")
+    val groupIdOpt = parser.accepts("groupId", "groupId")
       .withRequiredArg
       .describedAs("groupId")
       .ofType(classOf[String])
-    val startTimestamp = parser.accepts("startTimestamp", "startTimestamp")
+    val startTimestampOpt = parser.accepts("startTimestamp", "startTimestamp")
       .withRequiredArg
       .describedAs("startTimestamp")
       .ofType(classOf[String])
-    val endTimestamp = parser.accepts("endTimestamp", "endTimestamp")
+    val endTimestampOpt = parser.accepts("endTimestamp", "endTimestamp")
       .withRequiredArg
       .describedAs("endTimestamp")
       .ofType(classOf[String])
@@ -42,25 +44,29 @@ object MirrorScope {
       .withRequiredArg
       .describedAs("dstTopic")
       .ofType(classOf[String])
-    val dstBoostServer = parser.accepts("dstBoostServer", "dstBoostServer")
+    val dstBoostServerOpt = parser.accepts("dstBoostServer", "dstBoostServer")
       .withRequiredArg
       .describedAs("dstBoostServer")
       .ofType(classOf[String])
+
+    if(args.length == 0)
+      CommandLineUtils.printUsageAndDie(parser, "Read data from standard input and publish it to Kafka.")
+
     val options = parser.parse(args: _*)
-    val srcTopic = options.valueOf(scTopic)
-    val startTime = options.valueOf(startTimestamp).toLong
-    val endTime = options.valueOf(endTimestamp).toLong
+    val srcTopic = options.valueOf(srcTopicOpt)
+    val startTime = options.valueOf(startTimestampOpt).toLong
+    val endTime = options.valueOf(endTimestampOpt).toLong
     val dstTopic = options.valueOf(dstTopicOpt)
 
     val consumerProps = new Properties()
-    consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, options.valueOf(srcBoostServer));
-    consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, options.valueOf(groupId))
-    consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringDeserializer");
-    consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringDeserializer");
+    consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, options.valueOf(srcBoostServerOpt))
+    consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, options.valueOf(groupIdOpt))
+    consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.BytesDeserializer");
+    consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.BytesDeserializer");
     val producerProps = new Properties()
-    producerProps.put("bootstrap.servers", options.valueOf(dstBoostServer))
-    producerProps.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
-    producerProps.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer")
+    producerProps.put("bootstrap.servers", options.valueOf(dstBoostServerOpt))
+    producerProps.put("key.serializer", "org.apache.kafka.common.serialization.BytesSerializer")
+    producerProps.put("value.serializer", "org.apache.kafka.common.serialization.BytesSerializer")
     val producer = new KafkaProducer[Array[Byte], Array[Byte]](producerProps)
     val consumer = new KafkaConsumer[Array[Byte], Array[Byte]](consumerProps)
 
@@ -71,26 +77,28 @@ object MirrorScope {
       tps.add(new TopicPartition(partition.topic(), partition.partition()))
     }
 
-    val leos = consumer.endOffsets(tps)
-
     consumer.assign(tps)
     consumer.offsetsForTimes(timestampsToSearch).asScala.map { case (tp, timestamp) =>
       consumer.seek(tp, timestamp.offset())
     }
 
-    var timestamp = 0l
-    while (timestamp < endTime) {
-      val records = consumer.poll(100)
-      for (record <- records) {
-        timestamp = record.timestamp()
-        if (timestamp < endTime) {
-          producer.send(new ProducerRecord[Array[Byte], Array[Byte]](dstTopic, record.key(), record.value()))
+
+    breakable {
+      while (true) {
+        for (record <- consumer.poll(100)) {
+          if (record.timestamp() <= endTime && record.timestamp() >= startTime) {
+            //            println(s"timestamp=${record.timestamp()} record=${record} ")
+            producer.send(new ProducerRecord[Array[Byte], Array[Byte]](dstTopic, record.key(), record.value()))
+          } else {
+            tps.remove(new TopicPartition(record.topic(), record.partition()))
+          }
         }
+        if (tps.isEmpty) break()
       }
     }
 
-
     producer.close()
+    consumer.close()
   }
 
 }
