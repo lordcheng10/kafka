@@ -371,8 +371,10 @@ class KafkaApis(val requestChannel: RequestChannel,
    */
   def handleProduceRequest(request: RequestChannel.Request) {
     val produceRequest = request.body[ProduceRequest]
+    //这里request.header.toStruct 每次都会new 一个struct，只是算size，不需要
     val numBytesAppended = request.header.toStruct.sizeOf + request.bodyAndSize.size
 
+    //限速、回response
     def sendErrorResponse(error: Errors): Unit = {
       sendResponseMaybeThrottle(request, requestThrottleMs =>
         produceRequest.getErrorResponse(requestThrottleMs, error.exception))

@@ -113,9 +113,16 @@ object RequestChannel extends Logging {
         s"$header -- ${body[AbstractRequest].toString(details)}"
     }
 
+    /**
+     *  T <: AbstractRequest  T类型是AbstractRequest的子类型
+     *  ClassTag 参考：https://zhuanlan.zhihu.com/p/69792401
+     *               使用泛型match匹配时，jvm在运行时，会类型擦除，从而导致case匹配的时候，
+     *               不会检查类型是否未类型T，也可以匹配上，只要该key的value存在就能够匹配上，但如果使用了ClassTag就可以和不适用泛型一样，match的时候进行校验value的类型是否为T
+     *  implicit 参考：https://www.jianshu.com/p/1d119c937015 隐式类型转换
+     * */
     def body[T <: AbstractRequest](implicit classTag: ClassTag[T], nn: NotNothing[T]): T = {
       bodyAndSize.request match {
-        case r: T => r
+        case r: T => r  //这里就相当于强制类型转换了：T t1 = (T) t2
         case r =>
           throw new ClassCastException(s"Expected request with type ${classTag.runtimeClass}, but found ${r.getClass}")
       }
