@@ -73,6 +73,9 @@ class QueuedEvent(val event: ControllerEvent,
   }
 }
 
+/**
+ * 事件处理类，和0.11.0版本处理逻辑不太一样.
+ * */
 class ControllerEventManager(controllerId: Int,
                              processor: ControllerEventProcessor,
                              time: Time,
