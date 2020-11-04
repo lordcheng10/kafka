@@ -22,6 +22,10 @@ import kafka.common.{LeaderElectionNotNeededException, NoReplicaOnlineException,
 import kafka.log.LogConfig
 import kafka.server.{ConfigType, KafkaConfig}
 import kafka.utils.Logging
+/**
+ *  该类是partition leader选举策略，在trunk版本中废弃掉了，
+ *  重构了一个PartitionLeaderElectionAlgorithms 静态算法类
+ * */
 
 trait PartitionLeaderSelector {
 
@@ -76,6 +80,8 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
             } else {
               /**
                *  此处表示，从isr外面，活着的副本选举leader，存在丢数据的风险。
+               *  在trunck版本中，是否从isr外面的副本选举leader是可配置的，如果配置为false，
+               *  那么一旦isr中的副本都挂掉了，那么不能从外面的副本选举，此时partition的leader就为None。
                * */
               controllerContext.stats.uncleanLeaderElectionRate.mark()
               val newLeader = liveAssignedReplicas.head

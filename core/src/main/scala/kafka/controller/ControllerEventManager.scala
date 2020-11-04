@@ -24,6 +24,10 @@ import scala.collection._
 import kafka.metrics.KafkaTimer
 import kafka.utils.ShutdownableThread
 
+/**
+ * 事件管理器，在其他地方收集事件放到队列中，然后有一个controller事件处理线程从队列中取出来，进行处理。
+ * 在trunk版本中，该事件管理类逻辑被修改了。
+ * */
 class ControllerEventManager(rateAndTimeMetrics: Map[ControllerState, KafkaTimer],
                              eventProcessedListener: ControllerEvent => Unit) {
 

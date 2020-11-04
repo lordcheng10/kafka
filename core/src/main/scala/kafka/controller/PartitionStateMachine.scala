@@ -26,6 +26,17 @@ import org.I0Itec.zkclient.exception.ZkNodeExistsException
 import scala.collection._
 
 /**
+ * 这个文件包含三类功能：①状态机；③partition状态类；
+ *
+ * trunk版本中把现有的leader选举类(PartitionLeaderSelector)废弃掉了，
+ * 然后在这里重新写了一个leader选举算法类；
+ * */
+
+/**
+ *  在trunk版本中，PartitionStateMachine类变成了抽象类，
+ *  实现类有两个：ZkPartitionStateMachine和MockPartitionStateMachine.
+ *  目的是为了给单元测试提供一个状态机测试类。
+ *
  * This class represents the state machine for partitions. It defines the states that a partition can be in, and
  * transitions to move the partition to another legal state. The different states that a partition can be in are -
  * 1. NonExistentPartition: This state indicates that the partition was either never created or was created and then
@@ -344,6 +355,9 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
   }
 }
 
+/**
+ * partition状态类,下面这些类是标记了Partition的各个状态
+ * */
 sealed trait PartitionState {
   def state: Byte
   def validPreviousStates: Set[PartitionState]
