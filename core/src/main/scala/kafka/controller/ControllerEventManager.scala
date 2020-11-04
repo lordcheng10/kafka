@@ -40,6 +40,9 @@ trait ControllerEventProcessor {
   def preempt(event: ControllerEvent): Unit
 }
 
+/**
+ * 这个类用来封装ControllerEvent事件类，在0.11.0版本没有.
+ * */
 class QueuedEvent(val event: ControllerEvent,
                   val enqueueTimeMs: Long) {
   val processingStarted = new CountDownLatch(1)
@@ -52,6 +55,9 @@ class QueuedEvent(val event: ControllerEvent,
     processor.process(event)
   }
 
+  /**
+   * 目前ControllerEventProcessor 的唯一实现就是KafkaController，因此这里实际还是调用的event.preempt方法.
+   * */
   def preempt(processor: ControllerEventProcessor): Unit = {
     if (spent.getAndSet(true))
       return

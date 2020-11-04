@@ -2552,7 +2552,15 @@ case class LeaderIsrAndControllerEpoch(leaderAndIsr: LeaderAndIsr, controllerEpo
   }
 }
 
+/**
+ * 统计整个集群的状态，这里更应该叫ClusterStats 集群状态.
+ * */
 private[controller] class ControllerStats extends KafkaMetricsGroup {
+  /**
+   *  在0.11.0版本中，该metric是为了记录从isr外面活着的副本选举leader的次数。
+   *  在当前版本中，这个变量也是一样的作用，只是打点位置变了。
+   *  因为0.11.0版本的leader选举类被废弃掉了，因此打点位置在PartitionLeaderElectionAlgorithms类中.
+   * */
   val uncleanLeaderElectionRate = newMeter("UncleanLeaderElectionsPerSec", "elections", TimeUnit.SECONDS)
 
   val rateAndTimeMetrics: Map[ControllerState, KafkaTimer] = ControllerState.values.flatMap { state =>
@@ -2563,8 +2571,26 @@ private[controller] class ControllerStats extends KafkaMetricsGroup {
 
 }
 
+/**
+ * 下面的都是controller事件类，代表controller的各个事件.
+ * 事件类在触发的地方，会构建出来，并通过QueuedEvent类进行封装，
+ * 放入ControllerEventManager类中的事件队列中,
+ * 然后通过ControllerEventManager类中的事件处理线程ControllerEventThread，从队列中取出，
+ * 调用QueuedEvent.process进行处理,在该方法中，实际会调用KafkaController.process处理.
+ * */
+
 sealed trait ControllerEvent {
   def state: ControllerState
+  /**
+   * 在0.11.0中，这里是process接口，在该版本中把process接口取消掉了，
+   * 所有事件的process的处理逻辑，统一在KafkaController.process()中写，
+   * 在ControllerEventManager中，通过调用从事件队列中取出的QueuedEvent.process(processor: ControllerEventProcessor)方法进行处理,
+   * 在该版本中KafkaController类继承了特质类ControllerEventProcessor。
+   *
+   * preempt接口，所有的事件都没有实现。目前基本没起作用，
+   * 该接口设计的目的是：可能存在一些事件，在controller切换close的时候或者zk 重新初始化链接的时候，
+   * 可能需要在关闭前处理一些事情，process逻辑里面的事情可以不处理。
+   * */
   // preempt() is not executed by `ControllerEventThread` but by the main thread.
   def preempt(): Unit
 }

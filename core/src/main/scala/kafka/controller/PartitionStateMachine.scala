@@ -31,6 +31,14 @@ import org.apache.zookeeper.KeeperException
 import org.apache.zookeeper.KeeperException.Code
 import scala.collection.{Map, Seq, mutable}
 
+/**
+ * 这个文件包含三类功能：①状态机；②leader选举策略；③partition状态类；
+ * */
+
+/**
+ * partition状态机抽象类，有两个实现类：ZkPartitionStateMachine和MockPartitionStateMachine.
+ * MockPartitionStateMachine是用于测试的。
+ * */
 abstract class PartitionStateMachine(controllerContext: ControllerContext) extends Logging {
   /**
    * Invoked on successful controller election.
@@ -113,6 +121,7 @@ abstract class PartitionStateMachine(controllerContext: ControllerContext) exten
 }
 
 /**
+ * partition状态机，根据不同的partition状态做不同的处理动作。
  * This class represents the state machine for partitions. It defines the states that a partition can be in, and
  * transitions to move the partition to another legal state. The different states that a partition can be in are -
  * 1. NonExistentPartition: This state indicates that the partition was either never created or was created and then
@@ -519,6 +528,9 @@ class ZkPartitionStateMachine(config: KafkaConfig,
   }
 }
 
+/**
+ *  partition leader选举策略类.
+ * */
 object PartitionLeaderElectionAlgorithms {
   def offlinePartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int], uncleanLeaderElectionEnabled: Boolean, controllerContext: ControllerContext): Option[Int] = {
     assignment.find(id => liveReplicas.contains(id) && isr.contains(id)).orElse {
@@ -546,12 +558,21 @@ object PartitionLeaderElectionAlgorithms {
   }
 }
 
+/**
+ *  这些类只是leader选举策略算法的名称类，
+ *  不设计具体的算法实现,相当于枚举类型
+ * */
 sealed trait PartitionLeaderElectionStrategy
 final case class OfflinePartitionLeaderElectionStrategy(allowUnclean: Boolean) extends PartitionLeaderElectionStrategy
 final case object ReassignPartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
 final case object PreferredReplicaPartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
 final case object ControlledShutdownPartitionLeaderElectionStrategy extends PartitionLeaderElectionStrategy
 
+
+
+/**
+ * partition状态类,下面这些类是标记了Partition的各个状态
+ * */
 sealed trait PartitionState {
   def state: Byte
   def validPreviousStates: Set[PartitionState]

@@ -72,6 +72,10 @@ case class ReplicaAssignment private (replicas: Seq[Int],
     s"removingReplicas=${removingReplicas.mkString(",")})"
 }
 
+/**
+ *  相对于0.11.0，这里把ControllerContext给独立出来了，
+ *  之前都是包含在KafkaController中的。
+ * */
 class ControllerContext {
   val stats = new ControllerStats
   var offlinePartitionCount = 0
