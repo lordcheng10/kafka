@@ -74,6 +74,9 @@ class OfflinePartitionLeaderSelector(controllerContext: ControllerContext, confi
               throw new NoReplicaOnlineException(s"No replica for partition $topicAndPartition is alive. Live " +
                 s"brokers are: [${controllerContext.liveBrokerIds}]. Assigned replicas are: [$assignedReplicas].")
             } else {
+              /**
+               *  此处表示，从isr外面，活着的副本选举leader，存在丢数据的风险。
+               * */
               controllerContext.stats.uncleanLeaderElectionRate.mark()
               val newLeader = liveAssignedReplicas.head
               warn(s"No broker in ISR is alive for $topicAndPartition. Elect leader $newLeader from live " +

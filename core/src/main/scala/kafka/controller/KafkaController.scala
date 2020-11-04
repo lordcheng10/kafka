@@ -40,7 +40,17 @@ import org.apache.zookeeper.Watcher.Event.KeeperState
 import scala.collection._
 import scala.util.Try
 
+
+/**
+ *  作用：
+ *  1、
+ *
+ * */
 class ControllerContext(val zkUtils: ZkUtils) {
+  /**
+   *  ControllerStats：通过metric来记录controller的状态，eg：
+   *  ①从ISR外面副本，选举leader的次数: ControllerStats.uncleanLeaderElectionRate; ②各种zk目录变更所触发的事件状态(isr变更、controller变更、prefer等)
+   * */
   val stats = new ControllerStats
 
   var controllerChannelManager: ControllerChannelManager = null
@@ -1734,6 +1744,9 @@ case class LeaderIsrAndControllerEpoch(leaderAndIsr: LeaderAndIsr, controllerEpo
 }
 
 private[controller] class ControllerStats extends KafkaMetricsGroup {
+  /**
+   * 记录从isr外面活着的副本选举leader的次数
+   * */
   val uncleanLeaderElectionRate = newMeter("UncleanLeaderElectionsPerSec", "elections", TimeUnit.SECONDS)
 
   val rateAndTimeMetrics: Map[ControllerState, KafkaTimer] = ControllerState.values.flatMap { state =>
