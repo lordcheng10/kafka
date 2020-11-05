@@ -47,11 +47,15 @@ import scala.util.Try
  * */
 class ControllerContext(val zkUtils: ZkUtils) {
   /**
-   *  ControllerStats：通过metric来记录controller的状态，eg：
-   *  ①从ISR外面副本，选举leader的次数: ControllerStats.uncleanLeaderElectionRate; ②各种zk目录变更所触发的事件状态(isr变更、controller变更、prefer等)
+   *  ControllerStats：通过metric来记录controller的状态，其实这里叫controller状态表述不准确，叫集群状态更准确，eg：
+   *  ①从ISR外面副本，选举leader的次数: ControllerStats.uncleanLeaderElectionRate;
+   *  ②各种zk目录变更所触发的事件状态(isr变更、controller变更、prefer等)
    * */
   val stats = new ControllerStats
 
+  /**
+   * 在trunk版本中，这个变量的定义是在KafkaController中.
+   * */
   var controllerChannelManager: ControllerChannelManager = null
 
   var shuttingDownBrokerIds: mutable.Set[Int] = mutable.Set.empty

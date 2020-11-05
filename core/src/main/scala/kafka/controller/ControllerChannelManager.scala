@@ -40,17 +40,37 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable.HashMap
 import scala.collection.{Set, mutable}
 
+/**
+ * 在trunk版本中，这里增加了一个定义：
+ * val RequestRateAndQueueTimeMetricName = "RequestRateAndQueueTimeMs"
+ * 这里的变量作用是作为metric的name。
+ * */
 object ControllerChannelManager {
   val QueueSizeMetricName = "QueueSize"
 }
 
-class ControllerChannelManager(controllerContext: ControllerContext, config: KafkaConfig, time: Time, metrics: Metrics,
+/**
+ * 这个类的作用是用于管理controller到broker之间的通信channel。
+ *
+ * */
+class ControllerChannelManager(controllerContext: ControllerContext,
+                               config: KafkaConfig,
+                               time: Time,
+                               metrics: Metrics,
                                threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
   import ControllerChannelManager._
+
+  /**
+   * 这里保存的是用于和每个broker通信的信息，比如：发送队列、发送线程等。key是brokerId.
+   * controller到每一个broker之间都有一个单独的队列和发送线程。
+   * */
   protected val brokerStateInfo = new HashMap[Int, ControllerBrokerStateInfo]
   private val brokerLock = new Object
   this.logIdent = "[Channel manager on controller " + config.brokerId + "]: "
 
+  /**
+   * 统计controller到broker总的队列大小，这里应该拆开，总和指标没有意义.
+   * */
   newGauge(
     "TotalQueueSize",
     new Gauge[Int] {
@@ -60,6 +80,10 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
     }
   )
 
+  /**
+   * 在trunk版本中，这里是放到startup中的，
+   * 并且添加的是全量broker节点:liveOrShuttingDownBrokers
+   * */
   controllerContext.liveBrokers.foreach(addNewBroker)
 
   def startup() = {
