@@ -80,6 +80,9 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   )
 
+  /**
+   *  这里感觉有bug
+   * */
   def startup() = {
     controllerContext.liveOrShuttingDownBrokers.foreach(addNewBroker)
 
