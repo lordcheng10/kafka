@@ -87,6 +87,9 @@ class KafkaController(val config: KafkaConfig,
   private val isAlterIsrEnabled = config.interBrokerProtocolVersion >= KAFKA_2_7_IV2
   private val stateChangeLogger = new StateChangeLogger(config.brokerId, inControllerContext = true, None)
   val controllerContext = new ControllerContext
+  /**
+   * 在0.11.0版本中，这个变量是在ControllerContext中定义的，这里不是。
+   * */
   var controllerChannelManager = new ControllerChannelManager(controllerContext, config, time, metrics,
     stateChangeLogger, threadNamePrefix)
 

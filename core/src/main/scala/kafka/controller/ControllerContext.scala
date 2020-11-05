@@ -77,7 +77,15 @@ case class ReplicaAssignment private (replicas: Seq[Int],
  *  之前都是包含在KafkaController中的。
  * */
 class ControllerContext {
+  /**
+   *  ControllerStats：通过metric来记录controller的状态，其实这里叫controller状态表述不准确，叫集群状态更准确，eg：
+   *  ①从ISR外面副本，选举leader的次数: ControllerStats.uncleanLeaderElectionRate;
+   *  ②各种zk目录变更所触发的事件状态(isr变更、controller变更、prefer等)
+   *  ControllerStats的指标相对于0.11.0增加了很多。
+   * */
   val stats = new ControllerStats
+
+
   var offlinePartitionCount = 0
   var preferredReplicaImbalanceCount = 0
   val shuttingDownBrokerIds = mutable.Set.empty[Int]

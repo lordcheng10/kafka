@@ -43,11 +43,19 @@ import scala.jdk.CollectionConverters._
 import scala.collection.mutable.HashMap
 import scala.collection.{Seq, Set, mutable}
 
+/**
+ * 相对0.11.0，这里增加了变量：RequestRateAndQueueTimeMetricName,
+ * 这里的两个变量作用是作为metric的name。
+ * */
 object ControllerChannelManager {
   val QueueSizeMetricName = "QueueSize"
   val RequestRateAndQueueTimeMetricName = "RequestRateAndQueueTimeMs"
 }
 
+/**
+ * 相对0.11.0，这里增加了变量：stateChangeLogger: StateChangeLogger
+ *
+ * */
 class ControllerChannelManager(controllerContext: ControllerContext,
                                config: KafkaConfig,
                                time: Time,
@@ -55,11 +63,17 @@ class ControllerChannelManager(controllerContext: ControllerContext,
                                stateChangeLogger: StateChangeLogger,
                                threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
   import ControllerChannelManager._
-
+  /**
+   * 这里保存的是用于和每个broker通信的信息，比如：发送队列、发送线程等。key是brokerId.
+   * controller到每一个broker之间都有一个单独的队列和发送线程。
+   * */
   protected val brokerStateInfo = new HashMap[Int, ControllerBrokerStateInfo]
   private val brokerLock = new Object
   this.logIdent = "[Channel manager on controller " + config.brokerId + "]: "
 
+  /**
+   * 统计controller到broker总的队列大小，这里应该拆开，总和指标没有意义.
+   * */
   newGauge("TotalQueueSize",
     () => brokerLock synchronized {
       brokerStateInfo.values.iterator.map(_.messageQueue.size).sum
@@ -663,6 +677,9 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
   }
 }
 
+/**
+ * 相对于0.11.0，这里增加了requestRateAndTimeMetrics: Timer和reconfigurableChannelBuilder: Option[Reconfigurable]
+ * */
 case class ControllerBrokerStateInfo(networkClient: NetworkClient,
                                      brokerNode: Node,
                                      messageQueue: BlockingQueue[QueueItem],
