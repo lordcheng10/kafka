@@ -83,6 +83,8 @@ class ControllerChannelManager(controllerContext: ControllerContext,
   /**
    * 在trunk版本中，这里是放到startup中的，
    * 并且添加的是全量broker节点:liveOrShuttingDownBrokers
+   *
+   * 这里感觉有bug
    * */
   controllerContext.liveBrokers.foreach(addNewBroker)
 
