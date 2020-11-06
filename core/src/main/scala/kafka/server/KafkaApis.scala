@@ -876,6 +876,7 @@ class KafkaApis(val requestChannel: RequestChannel,
 
     topic match {
       case GROUP_METADATA_TOPIC_NAME =>
+        //config.offsetsTopicReplicationFactor = 1.toShort //本地运行，测试的
         if (aliveBrokers.size < config.offsetsTopicReplicationFactor) {
           error(s"Number of alive brokers '${aliveBrokers.size}' does not meet the required replication factor " +
             s"'${config.offsetsTopicReplicationFactor}' for the offsets topic (configured via " +
