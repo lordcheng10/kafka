@@ -685,6 +685,8 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
        * 在trunk版本中这里获取的不仅仅是brokerId，
        * 还有brokerId对应的Epoch号，
        * 在trunk版本中，ZkUtils类被KafkaZkClient所取代。
+       * 原来这里是这样写的：
+       * val curBrokers = currentBrokerList.map(_.toInt).toSet.flatMap(zkUtils.getBrokerInfo)
        * */
       val curBrokers = zkUtils.getAllBrokersInCluster().toSet
       val curBrokerIds = curBrokers.map(_.id)
