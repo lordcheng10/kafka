@@ -222,6 +222,9 @@ class ControllerChannelManager(controllerContext: ControllerContext,
 
   protected def startRequestSendThread(brokerId: Int): Unit = {
     val requestThread = brokerStateInfo(brokerId).requestSendThread
+    /**
+     * 只启动线程状态是NEW的线程，保证了不会重复启动。
+     * */
     if (requestThread.getState == Thread.State.NEW)
       requestThread.start()
   }
