@@ -672,10 +672,20 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
 
     def state = ControllerState.BrokerChange
 
+    /**
+     * 在trunk版本中，process 方法提取到KafkaController了，
+     * 这里被一个叫preempt的接口进行替代，
+     * 该接口用来实现一些，需要在zk初始化之前做的一些抢占式的工作。
+     * */
     override def process(): Unit = {
       if (!isActive) return
       // Read the current broker list from ZK again instead of using currentBrokerList to increase
       // the odds of processing recent broker changes in a single ControllerEvent (KAFKA-5502).
+      /**
+       * 在trunk版本中这里获取的不仅仅是brokerId，
+       * 还有brokerId对应的Epoch号，
+       * 在trunk版本中，ZkUtils类被KafkaZkClient所取代。
+       * */
       val curBrokers = zkUtils.getAllBrokersInCluster().toSet
       val curBrokerIds = curBrokers.map(_.id)
       val liveOrShuttingDownBrokerIds = controllerContext.liveOrShuttingDownBrokerIds
