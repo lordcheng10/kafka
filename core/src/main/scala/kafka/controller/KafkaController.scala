@@ -1556,6 +1556,10 @@ class KafkaController(val config: KafkaConfig,
 
   private def processBrokerChange(): Unit = {
     if (!isActive) return
+    /**
+     * 这里相对于0.11.0版本，除了获取brokerId外，还获取了对应的Epoch号.
+     * 并且用KafkaZkClient替代了之前的ZkUtil类。
+     * */
     val curBrokerAndEpochs = zkClient.getAllBrokerAndEpochsInCluster
     val curBrokerIdAndEpochs = curBrokerAndEpochs map { case (broker, epoch) => (broker.id, epoch) }
     val curBrokerIds = curBrokerIdAndEpochs.keySet
