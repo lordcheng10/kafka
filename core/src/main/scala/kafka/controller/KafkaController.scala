@@ -682,7 +682,7 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
       // Read the current broker list from ZK again instead of using currentBrokerList to increase
       // the odds of processing recent broker changes in a single ControllerEvent (KAFKA-5502).
       /**
-       * 在trunk版本中这里获取的不仅仅是brokerId，
+       * 在trunk版本中这里获取的不仅仅是brokerId，加入了epoch
        * 还有brokerId对应的Epoch号，
        * 在trunk版本中，ZkUtils类被KafkaZkClient所取代。
        * 原来这里是这样写的：
@@ -691,8 +691,15 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
       val curBrokers = zkUtils.getAllBrokersInCluster().toSet
       val curBrokerIds = curBrokers.map(_.id)
       val liveOrShuttingDownBrokerIds = controllerContext.liveOrShuttingDownBrokerIds
+      /**
+       * 在trunk版本中，除了处理新增和宕掉的broker外，还要处理epoche变大的broker(比如宕机瞬间拉起的)
+       *
+       * 哪这里是否是泄漏了比如类似宕机重启这类broker的处理?
+       * */
       val newBrokerIds = curBrokerIds -- liveOrShuttingDownBrokerIds
       val deadBrokerIds = liveOrShuttingDownBrokerIds -- curBrokerIds
+
+
       val newBrokers = curBrokers.filter(broker => newBrokerIds(broker.id))
       controllerContext.liveBrokers = curBrokers
       val newBrokerIdsSorted = newBrokerIds.toSeq.sorted
