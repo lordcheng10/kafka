@@ -1564,10 +1564,21 @@ class KafkaController(val config: KafkaConfig,
     val curBrokerIdAndEpochs = curBrokerAndEpochs map { case (broker, epoch) => (broker.id, epoch) }
     val curBrokerIds = curBrokerIdAndEpochs.keySet
     val liveOrShuttingDownBrokerIds = controllerContext.liveOrShuttingDownBrokerIds
+    /**
+     * 相对于0.11.0版本，这里用diff取代了--(因为Scala 2.13.2使用--会有warn警告)
+     * */
     val newBrokerIds = curBrokerIds.diff(liveOrShuttingDownBrokerIds)
     val deadBrokerIds = liveOrShuttingDownBrokerIds.diff(curBrokerIds)
+    /**
+     * 从curBrokerIds和liveOrShuttingDownBrokerIds的交集中，选出Epoch号增大的broker.
+     * 意思就是找出类似broker挂掉，瞬间拉起的broker
+     * 这个处理方法我们主要处理三类broker：新增的、挂掉的、epoch变大的(比如：宕机瞬间拉起的broker)。
+     * 哪这样的话，0.11.0版本不就少处理了一类broker吗
+     * */
     val bouncedBrokerIds = (curBrokerIds & liveOrShuttingDownBrokerIds)
       .filter(brokerId => curBrokerIdAndEpochs(brokerId) > controllerContext.liveBrokerIdAndEpochs(brokerId))
+
+
     val newBrokerAndEpochs = curBrokerAndEpochs.filter { case (broker, _) => newBrokerIds.contains(broker.id) }
     val bouncedBrokerAndEpochs = curBrokerAndEpochs.filter { case (broker, _) => bouncedBrokerIds.contains(broker.id) }
     val newBrokerIdsSorted = newBrokerIds.toSeq.sorted
