@@ -27,6 +27,8 @@ import org.apache.kafka.common.internals.FatalExitError
 import scala.concurrent.TimeoutException
 
 /**
+ * 功能版本控制系统（KIP-584)
+ *
  * Listens to changes in the ZK feature node, via the ZK client. Whenever a change notification
  * is received from ZK, the feature cache in FinalizedFeatureCache is asynchronously updated
  * to the latest features read from ZK. The cache updates are serialized through a single

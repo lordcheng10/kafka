@@ -519,29 +519,57 @@ class KafkaController(val config: KafkaConfig,
    */
   private def onBrokerStartup(newBrokers: Seq[Int]): Unit = {
     info(s"New broker startup callback for ${newBrokers.mkString(",")}")
+    /**
+     * 从replicasOnOfflineDirs移除。
+     * */
     newBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
     val newBrokersSet = newBrokers.toSet
+    /**
+     * 当前存在的broker
+     * */
     val existingBrokers = controllerContext.liveOrShuttingDownBrokerIds.diff(newBrokersSet)
     // Send update metadata request to all the existing brokers in the cluster so that they know about the new brokers
     // via this update. No need to include any partition states in the request since there are no partition state changes.
+    /**
+     * 给集群当前现存的broker，发送metadata.
+     * */
     sendUpdateMetadataRequest(existingBrokers.toSeq, Set.empty)
     // Send update metadata request to all the new brokers in the cluster with a full set of partition states for initialization.
     // In cases of controlled shutdown leaders will not be elected when a new broker comes up. So at least in the
     // common controlled shutdown case, the metadata will reach the new brokers faster.
+    /**
+     * 给新增broker发送metadata信息.
+     * */
     sendUpdateMetadataRequest(newBrokers, controllerContext.partitionsWithLeaders)
     // the very first thing to do when a new broker comes up is send it the entire list of partitions that it is
     // supposed to host. Based on that the broker starts the high watermark threads for the input list of partitions
+    /**
+     * 过滤出在新启的broker上，存在的副本.
+     * */
     val allReplicasOnNewBrokers = controllerContext.replicasOnBrokers(newBrokersSet)
+    /**
+     * 对这些副本，进行状态转换，变为Online.
+     * */
     replicaStateMachine.handleStateChanges(allReplicasOnNewBrokers.toSeq, OnlineReplica)
     // when a new broker comes up, the controller needs to trigger leader election for all new and offline partitions
     // to see if these brokers can become leaders for some/all of those
+    /**
+     * 对new partition和OfflinePartition 状态的副本触发leader选举
+     * */
     partitionStateMachine.triggerOnlinePartitionStateChange()
     // check if reassignment of some partitions need to be restarted
-    maybeResumeReassignments { (_, assignment) =>
+
+    /**
+     * 判断ressign中，是否存在一些副本在新启的broker上，如果存在，那么这些partition需要重新启动ressign.
+     * */
+    maybeResumeReassignments {(_, assignment) =>
       assignment.targetReplicas.exists(newBrokersSet.contains)
     }
     // check if topic deletion needs to be resumed. If at least one replica that belongs to the topic being deleted exists
     // on the newly restarted brokers, there is a chance that topic deletion can resume
+    /**
+     * 对于之前正在删除topic，但由于某个broker挂了，导致某些副本的删除没完成，那么此时如果broker启动了，会重新触发删除动作.
+     * */
     val replicasForTopicsToBeDeleted = allReplicasOnNewBrokers.filter(p => topicDeletionManager.isTopicQueuedUpForDeletion(p.topic))
     if (replicasForTopicsToBeDeleted.nonEmpty) {
       info(s"Some replicas ${replicasForTopicsToBeDeleted.mkString(",")} for topics scheduled for deletion " +
@@ -549,6 +577,9 @@ class KafkaController(val config: KafkaConfig,
         s"${newBrokers.mkString(",")}. Signaling restart of topic deletion for these topics")
       topicDeletionManager.resumeDeletionForTopics(replicasForTopicsToBeDeleted.map(_.topic))
     }
+    /**
+     * 注册brokerId对应的hanlder监听器
+     * */
     registerBrokerModificationsHandler(newBrokers)
   }
 
@@ -1531,6 +1562,15 @@ class KafkaController(val config: KafkaConfig,
   }
 
   /**
+   * 这个方法主要是做版本兼容，在KAFKA_2_7_IV0版本之前的版本,都是兼容的。
+   * 在这之后的可能存在不兼容的broker，对于版本不兼容的broker，直接忽略.
+   *
+   * 也就是说在KAFKA_2_7_IV0之前的版本，都是向下兼容好了的，
+   * 所以如果启动的broker是这个版本之前的，那没事，不需要考虑不兼容的问题。
+   * 但是在KAFKA_2_7_IV0这个以及之后的版本兼容性就没做好，就需要考虑兼容性问题。
+   *
+   * (支持启动的broker的所有功能 兼容的broker，存在不支持的功能  不兼容的broker)
+   *
    * Partitions the provided map of brokers and epochs into 2 new maps:
    *  - The first map contains only those brokers whose features were found to be compatible with
    *    the existing finalized features.
@@ -1545,6 +1585,9 @@ class KafkaController(val config: KafkaConfig,
     // There can not be any feature incompatibilities when the feature versioning system is disabled
     // or when the finalized feature cache is empty. Otherwise, we check if the non-empty contents
     //  of the cache are compatible with the supported features of each broker.
+    /**
+     * partiton 把true的放左边，false的放右边
+     * */
     brokersAndEpochs.partition {
       case (broker, _) =>
         !config.isFeatureVersioningSupported ||
@@ -1578,9 +1621,16 @@ class KafkaController(val config: KafkaConfig,
     val bouncedBrokerIds = (curBrokerIds & liveOrShuttingDownBrokerIds)
       .filter(brokerId => curBrokerIdAndEpochs(brokerId) > controllerContext.liveBrokerIdAndEpochs(brokerId))
 
-
+    /**
+     * newBrokerAndEpochs：从curBrokerAndEpochs中选出，新增的Broker类以及epoch;
+     * bouncedBrokerAndEpochs: 从curBrokerAndEpochs中选出，epoch变大的Broker类和epoch;
+     * */
     val newBrokerAndEpochs = curBrokerAndEpochs.filter { case (broker, _) => newBrokerIds.contains(broker.id) }
     val bouncedBrokerAndEpochs = curBrokerAndEpochs.filter { case (broker, _) => bouncedBrokerIds.contains(broker.id) }
+
+    /***
+     * 对新增的、挂掉的、活着的、epoch变化的brokerid进行排序
+     * */
     val newBrokerIdsSorted = newBrokerIds.toSeq.sorted
     val deadBrokerIdsSorted = deadBrokerIds.toSeq.sorted
     val liveBrokerIdsSorted = curBrokerIds.toSeq.sorted
@@ -1590,21 +1640,46 @@ class KafkaController(val config: KafkaConfig,
       s"bounced brokers: ${bouncedBrokerIdsSorted.mkString(",")}, " +
       s"all live brokers: ${liveBrokerIdsSorted.mkString(",")}")
 
+
     newBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
+    /**
+     * 对于epoch变化的broker，先移除，再添加channel.
+     * 新增的broker，添加channel管理；挂掉的broker，移除;
+     * */
     bouncedBrokerIds.foreach(controllerChannelManager.removeBroker)
     bouncedBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
+
     deadBrokerIds.foreach(controllerChannelManager.removeBroker)
 
+
+    /**
+     *  对新增的broker进行版本兼容判断，对于兼容的broker，才进行注册，否则忽略。
+     * */
     if (newBrokerIds.nonEmpty) {
+      /**
+       * newCompatibleBrokerAndEpochs：兼容的
+       * newIncompatibleBrokerAndEpochs：不兼容的
+       * */
       val (newCompatibleBrokerAndEpochs, newIncompatibleBrokerAndEpochs) =
         partitionOnFeatureCompatibility(newBrokerAndEpochs)
       if (!newIncompatibleBrokerAndEpochs.isEmpty) {
         warn("Ignoring registration of new brokers due to incompatibilities with finalized features: " +
           newIncompatibleBrokerAndEpochs.map { case (broker, _) => broker.id }.toSeq.sorted.mkString(","))
       }
+      /**
+       * 0.11.0是采用的直接覆盖的方式.
+       * controllerContext.liveBrokers = curBrokers
+       * */
       controllerContext.addLiveBrokers(newCompatibleBrokerAndEpochs)
+
+      /**
+       * 新增节点初始化
+       * */
       onBrokerStartup(newBrokerIdsSorted)
     }
+
+
+
     if (bouncedBrokerIds.nonEmpty) {
       controllerContext.removeLiveBrokers(bouncedBrokerIds)
       onBrokerFailure(bouncedBrokerIdsSorted)

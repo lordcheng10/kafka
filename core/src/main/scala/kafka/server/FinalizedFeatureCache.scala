@@ -35,6 +35,8 @@ case class FinalizedFeaturesAndEpoch(features: Features[FinalizedVersionRange], 
 }
 
 /**
+ *  功能版本控制系统（KIP-584)，该类缓存了功能.在FinalizedFeatureChangeListener 中更新
+ *
  * A common mutable cache containing the latest finalized features and epoch. By default the contents of
  * the cache are empty. This cache needs to be populated at least once for its contents to become
  * non-empty. Currently the main reader of this cache is the read path that serves an ApiVersionsRequest,
