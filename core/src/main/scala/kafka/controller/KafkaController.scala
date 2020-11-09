@@ -699,20 +699,45 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
       val newBrokerIds = curBrokerIds -- liveOrShuttingDownBrokerIds
       val deadBrokerIds = liveOrShuttingDownBrokerIds -- curBrokerIds
 
-
+      /**
+       * 根据brokerId，构建过滤出新增的Broker对象.
+       * */
       val newBrokers = curBrokers.filter(broker => newBrokerIds(broker.id))
+
+      /**
+       * 更新活着的broker列表， 在trunk版本中是添加新增，或减少宕机节点
+       * */
       controllerContext.liveBrokers = curBrokers
+      /**
+       * 排序
+       * */
       val newBrokerIdsSorted = newBrokerIds.toSeq.sorted
       val deadBrokerIdsSorted = deadBrokerIds.toSeq.sorted
       val liveBrokerIdsSorted = curBrokerIds.toSeq.sorted
       info("Newly added brokers: %s, deleted brokers: %s, all live brokers: %s"
         .format(newBrokerIdsSorted.mkString(","), deadBrokerIdsSorted.mkString(","), liveBrokerIdsSorted.mkString(",")))
+
+      /**
+       * 新增的broker，添加channel管理；挂掉的broker，移除;
+       * */
       newBrokers.foreach(controllerContext.controllerChannelManager.addBroker)
       deadBrokerIds.foreach(controllerContext.controllerChannelManager.removeBroker)
-      if (newBrokerIds.nonEmpty)
+
+      /**
+       * 对新增和挂掉的broker进行处理.
+       * */
+      if (newBrokerIds.nonEmpty) {
+        /**
+         * 新增节点初始化
+         * */
         onBrokerStartup(newBrokerIdsSorted)
-      if (deadBrokerIds.nonEmpty)
+      }
+      if (deadBrokerIds.nonEmpty) {
+        /**
+         * 挂掉节点清理
+         * */
         onBrokerFailure(deadBrokerIdsSorted)
+      }
     }
   }
 
