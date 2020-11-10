@@ -100,6 +100,15 @@ class ControllerContext {
   val partitionsBeingReassigned = mutable.Set.empty[TopicPartition]
   val partitionStates = mutable.Map.empty[TopicPartition, PartitionState]
   val replicaStates = mutable.Map.empty[PartitionAndReplica, ReplicaState]
+  /**
+   * 当stop replica的时候，会把partition状态，标记为Errors.KAFKA_STORAGE_ERROR错误码，
+   * 然后controller在发leader and isr的时候，broker上如果存在Errors.KAFKA_STORAGE_ERROR状态的partition，
+   * 会告诉controller，然后controller把这些partition放到replicasOnOfflineDirs中。
+   *
+   * 也就是说 这个变量在kafka controller处理leader and isr请求的时候，才会更新。
+   *
+   * key是brokerId，value是上面的partition集合。
+   * */
   val replicasOnOfflineDirs = mutable.Map.empty[Int, Set[TopicPartition]]
 
   val topicsToBeDeleted = mutable.Set.empty[String]

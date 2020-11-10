@@ -367,6 +367,9 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
                   request: AbstractControlRequest.Builder[_ <: AbstractControlRequest],
                   callback: AbstractResponse => Unit = null): Unit
 
+  /**
+   * 在每次发送metadata请求等前，需要看下之前的metadata请求是否完成，完成后才能发送下次请求.
+   * */
   def newBatch(): Unit = {
     // raise error if the previous batch is not empty
     if (leaderAndIsrRequestMap.nonEmpty)

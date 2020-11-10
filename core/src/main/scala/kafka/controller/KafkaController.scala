@@ -520,7 +520,10 @@ class KafkaController(val config: KafkaConfig,
   private def onBrokerStartup(newBrokers: Seq[Int]): Unit = {
     info(s"New broker startup callback for ${newBrokers.mkString(",")}")
     /**
-     * 从replicasOnOfflineDirs移除。
+     * 从replicasOnOfflineDirs记录了一些offline的partiton，
+     * 如果他们所对对应的broker启动起来了，那么就从replicasOnOfflineDirs中移除该broker，
+     * 这个好像是，当broker宕机的时候，在这个broker上的partiton就会迁到replicasOnOfflineDirs中，
+     * 当broker启动起来后，这个broker上的副本就活过来了，可以从replicasOnOfflineDirs中移掉。
      * */
     newBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
     val newBrokersSet = newBrokers.toSet
@@ -1206,8 +1209,17 @@ class KafkaController(val config: KafkaConfig,
    */
   private[controller] def sendUpdateMetadataRequest(brokers: Seq[Int], partitions: Set[TopicPartition]): Unit = {
     try {
+      /**
+       * 检查下之前的metadata请求等是否完成，如果没有完成的话，这里会抛异常
+       * */
       brokerRequestBatch.newBatch()
+      /**
+       * 将要更新metadata的broker和partition放到一个集合里，下面会统一发送.
+       * */
       brokerRequestBatch.addUpdateMetadataRequestForBrokers(brokers, partitions)
+      /**
+       * 发送metadata请求
+       * */
       brokerRequestBatch.sendRequestsToBrokers(epoch)
     } catch {
       case e: IllegalStateException =>
