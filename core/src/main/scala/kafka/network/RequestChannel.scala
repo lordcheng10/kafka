@@ -84,6 +84,10 @@ object RequestChannel extends Logging {
                 metrics: RequestChannel.Metrics) extends BaseRequest {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
     // handler threads or the purgatory threads
+    /**
+     * ①requestDequeueTimeNanos 从request队列出来的时间；
+     * ②apiLocalCompleteTimeNanos：handler处理完成的时间;
+     * */
     @volatile var requestDequeueTimeNanos = -1L
     @volatile var apiLocalCompleteTimeNanos = -1L
     @volatile var responseCompleteTimeNanos = -1L
@@ -182,13 +186,36 @@ object RequestChannel extends Logging {
         TimeUnit.NANOSECONDS.toMicros(positiveNanos).toDouble / TimeUnit.MILLISECONDS.toMicros(1)
       }
 
+      /**
+       * 生成request请求->放入队列->请求出队列
+       * */
       val requestQueueTimeMs = nanosToMs(requestDequeueTimeNanos - startTimeNanos)
+      /**
+       * 请求出队列 -> handle处理完成
+       * */
       val apiLocalTimeMs = nanosToMs(apiLocalCompleteTimeNanos - requestDequeueTimeNanos)
+      /**
+       * handle处理完成->放入response队列(正常handle处理包括放入response，
+       * 但在delay response的时候，handle不包括放入response队列)
+       * */
       val apiRemoteTimeMs = nanosToMs(responseCompleteTimeNanos - apiLocalCompleteTimeNanos)
+      /**
+       * 放入response->出队列的时间
+       * */
       val responseQueueTimeMs = nanosToMs(responseDequeueTimeNanos - responseCompleteTimeNanos)
+      /**
+       * 出response队列->放入selector的时间
+       * */
       val responseSendTimeMs = nanosToMs(endTimeNanos - responseDequeueTimeNanos)
+      /**
+       * 在log.append的时候，消息的转换时间
+       * */
       val messageConversionsTimeMs = nanosToMs(messageConversionsTimeNanos)
+      /**
+       * 从请求接收，到select发送的服务端处理时延。
+       * */
       val totalTimeMs = nanosToMs(endTimeNanos - startTimeNanos)
+
       val fetchMetricNames =
         if (header.apiKey == ApiKeys.FETCH) {
           val isFromFollower = body[FetchRequest].isFromFollower
