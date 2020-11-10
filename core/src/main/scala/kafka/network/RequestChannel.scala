@@ -150,12 +150,34 @@ object RequestChannel extends Logging {
 
       def nanosToMs(nanos: Long) = math.max(TimeUnit.NANOSECONDS.toMillis(nanos), 0)
 
+      /**
+       * 生成request请求 -> 放入队列 -> 请求出队列
+       * */
       val requestQueueTime = nanosToMs(requestDequeueTimeNanos - startTimeNanos)
+      /**
+       * 请求出队列 -> handle处理完成
+       * */
       val apiLocalTime = nanosToMs(apiLocalCompleteTimeNanos - requestDequeueTimeNanos)
+      /**
+       * handle处理完成->放入response队列(正常handle处理包括放入response，
+       * 但在delay response的时候，handle不包括放入response队列)
+       * (这里的delay可能是fetch 不足数据量或producer ack=-1，需要等待副本同步的delay时间)
+       * */
       val apiRemoteTime = nanosToMs(apiRemoteCompleteTimeNanos - apiLocalCompleteTimeNanos)
+      /**
+       * 构建callback-> 放入限速delay queue：这里是限速耗时统计
+       * */
       val apiThrottleTime = nanosToMs(responseCompleteTimeNanos - apiRemoteCompleteTimeNanos)
+
+      /**
+       * 从限速delay queue取出来->放入response queue
+       * */
       val responseQueueTime = nanosToMs(responseDequeueTimeNanos - responseCompleteTimeNanos)
+      /**
+       * response queue中取出response-> 构建response send并发送出去 -> 收到响应，表示包发送成功了
+       * */
       val responseSendTime = nanosToMs(endTimeNanos - responseDequeueTimeNanos)
+
       val totalTime = nanosToMs(endTimeNanos - startTimeNanos)
       val fetchMetricNames =
         if (requestId == ApiKeys.FETCH.id) {
@@ -191,8 +213,18 @@ object RequestChannel extends Logging {
         val detailsEnabled = requestLogger.isTraceEnabled
         def nanosToMs(nanos: Long) = TimeUnit.NANOSECONDS.toMicros(math.max(nanos, 0)).toDouble / TimeUnit.MILLISECONDS.toMicros(1)
         val totalTimeMs = nanosToMs(endTimeNanos - startTimeNanos)
+        /**
+         * 生成request请求 -> 放入队列 -> 请求出队列
+         * */
         val requestQueueTimeMs = nanosToMs(requestDequeueTimeNanos - startTimeNanos)
+        /**
+         * 请求出队列 -> handle处理完成
+         * */
         val apiLocalTimeMs = nanosToMs(apiLocalCompleteTimeNanos - requestDequeueTimeNanos)
+        /**
+         * handle处理完成->放入response队列(正常handle处理包括放入response，
+         * 但在delay response的时候，handle不包括放入response队列)
+         * */
         val apiRemoteTimeMs = nanosToMs(apiRemoteCompleteTimeNanos - apiLocalCompleteTimeNanos)
         val apiThrottleTimeMs = nanosToMs(responseCompleteTimeNanos - apiRemoteCompleteTimeNanos)
         val responseQueueTimeMs = nanosToMs(responseDequeueTimeNanos - responseCompleteTimeNanos)
