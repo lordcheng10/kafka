@@ -177,7 +177,9 @@ object RequestChannel extends Logging {
        * response queue中取出response-> 构建response send并发送出去 -> 收到响应，表示包发送成功了
        * */
       val responseSendTime = nanosToMs(endTimeNanos - responseDequeueTimeNanos)
-
+      /**
+       *  从请求接收，到select发送的服务端处理时延。
+       * */
       val totalTime = nanosToMs(endTimeNanos - startTimeNanos)
       val fetchMetricNames =
         if (requestId == ApiKeys.FETCH.id) {
