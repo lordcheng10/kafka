@@ -208,8 +208,14 @@ class BrokerTopicMetrics(name: Option[String]) extends KafkaMetricsGroup {
   // used for testing only
   def metricMap: Map[String, MeterWrapper] = metricTypeMap.toMap
 
+  /**
+   * 真实的消息数(解压后的)：lastOffset - firstOffsetVal + 1
+   * */
   def messagesInRate: Meter = metricTypeMap.get(BrokerTopicStats.MessagesInPerSec).meter()
 
+  /**
+   * bytesInRate和bytesRejectedRate都是统计的解压前的大小
+   * */
   def bytesInRate: Meter = metricTypeMap.get(BrokerTopicStats.BytesInPerSec).meter()
 
   def bytesOutRate: Meter = metricTypeMap.get(BrokerTopicStats.BytesOutPerSec).meter()
@@ -236,8 +242,17 @@ class BrokerTopicMetrics(name: Option[String]) extends KafkaMetricsGroup {
 
   def failedFetchRequestRate: Meter = metricTypeMap.get(BrokerTopicStats.FailedFetchRequestsPerSec).meter()
 
+  /**
+   * producer qps ,但这个qps是按照partition维度的累计的，eg：一个producerRequest有10个partiton，那么这个值会统计10次
+   * 每分钟发了几次partition 写请求
+   * */
   def totalProduceRequestRate: Meter = metricTypeMap.get(BrokerTopicStats.TotalProduceRequestsPerSec).meter()
 
+  /**
+   * fetch qps,和上面一样，都是partiton粒度的累加
+   * 每分钟发了几次partition fetch请求
+   * TODO-PATCH:这里也可以提下，可以直接增加一个broker维度的qps统计，是真实的request请求数
+   * */
   def totalFetchRequestRate: Meter = metricTypeMap.get(BrokerTopicStats.TotalFetchRequestsPerSec).meter()
 
   def fetchMessageConversionsRate: Meter = metricTypeMap.get(BrokerTopicStats.FetchMessageConversionsPerSec).meter()
@@ -295,12 +310,18 @@ class BrokerTopicStats extends Logging {
   def topicStats(topic: String): BrokerTopicMetrics =
     stats.getAndMaybePut(topic)
 
+  /**
+   * follower append时候，统计的副本入口流量
+   * */
   def updateReplicationBytesIn(value: Long): Unit = {
     allTopicsStats.replicationBytesInRate.foreach { metric =>
       metric.mark(value)
     }
   }
 
+  /**
+   * leader统计的副本出口流量
+   * */
   private def updateReplicationBytesOut(value: Long): Unit = {
     allTopicsStats.replicationBytesOutRate.foreach { metric =>
       metric.mark(value)

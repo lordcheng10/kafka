@@ -937,6 +937,9 @@ class ReplicaManager(val config: KafkaConfig,
       trace(s"Append [$entriesPerPartition] to local log")
 
     entriesPerPartition.map { case (topicPartition, records) =>
+      /**
+       * TODO-patch:这里可以提下patch，这个qps统计没啥用，应该提到外面去统计
+       * */
       brokerTopicStats.topicStats(topicPartition.topic).totalProduceRequestRate.mark()
       brokerTopicStats.allTopicsStats.totalProduceRequestRate.mark()
 

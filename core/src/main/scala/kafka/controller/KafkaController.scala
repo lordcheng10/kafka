@@ -526,15 +526,21 @@ class KafkaController(val config: KafkaConfig,
      * 当broker启动起来后，这个broker上的副本就活过来了，可以从replicasOnOfflineDirs中移掉。
      * */
     newBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
+
+    /**
+     *  新增broker列表，可能并不"新"，比如，宕机重启的
+     * */
     val newBrokersSet = newBrokers.toSet
     /**
-     * 当前存在的broker
+     * 先给没在newBrokersSet集合中的broker发metadata信息.再给newBrokersSet中的发。
+     * 这样做目的是:为了防止给newBrokersSet和liveOrShuttingDownBrokerIds交集的broker发送两次metadata.
      * */
     val existingBrokers = controllerContext.liveOrShuttingDownBrokerIds.diff(newBrokersSet)
     // Send update metadata request to all the existing brokers in the cluster so that they know about the new brokers
     // via this update. No need to include any partition states in the request since there are no partition state changes.
     /**
-     * 给集群当前现存的broker，发送metadata.
+     * 给没在newBrokersSet集合的broker发送metadata.
+     * 0.11.0版本是给liveOrShuttingDownBrokerIds中的所有broker发
      * */
     sendUpdateMetadataRequest(existingBrokers.toSeq, Set.empty)
     // Send update metadata request to all the new brokers in the cluster with a full set of partition states for initialization.
@@ -1210,7 +1216,8 @@ class KafkaController(val config: KafkaConfig,
   private[controller] def sendUpdateMetadataRequest(brokers: Seq[Int], partitions: Set[TopicPartition]): Unit = {
     try {
       /**
-       * 检查下之前的metadata请求等是否完成，如果没有完成的话，这里会抛异常
+       * 需要检查：之前是否有stopReplica、leaderAndIsr、metadata三类请求之前没发送完成。
+       * 如果没有发送完，那么不能发新的，这里会抛异常.
        * */
       brokerRequestBatch.newBatch()
       /**

@@ -369,6 +369,10 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
 
   /**
    * 在每次发送metadata请求等前，需要看下之前的metadata请求是否完成，完成后才能发送下次请求.
+   * 判断之前的发送请求是否发送完成：
+   * ①leader and isr;②stop replica;③更新metadata请求;
+   *
+   * 这三个结构在要发之前添加，在发送后，clear掉。不会等收到response才clear掉.
    * */
   def newBatch(): Unit = {
     // raise error if the previous batch is not empty
@@ -470,6 +474,7 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
           info(s"Leader not yet assigned for partition $partition. Skip sending UpdateMetadataRequest.")
       }
     }
+
 
     updateMetadataRequestBrokerSet ++= brokerIds.filter(_ >= 0)
     partitions.foreach(partition => updateMetadataRequestPartitionInfo(partition,

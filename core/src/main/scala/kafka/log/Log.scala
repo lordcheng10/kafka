@@ -1143,6 +1143,9 @@ class Log(@volatile private var _dir: File,
             // format conversion)
             if (!ignoreRecordSize && validateAndOffsetAssignResult.messageSizeMaybeChanged) {
               validRecords.batches.forEach { batch =>
+                /**
+                 * batch是解压前的，是浅遍历
+                 * */
                 if (batch.sizeInBytes > config.maxMessageSize) {
                   // we record the original message set size instead of the trimmed size
                   // to be consistent with pre-compression bytesRejectedRate recording

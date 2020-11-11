@@ -181,7 +181,13 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
   private val expirationReaper = new ExpiredOperationReaper()
 
   private val metricsTags = Map("delayedOperation" -> purgatoryName)
+  /**
+   * 放入delay 队列的大小,从这里可以反映比如group rebalance，因为rebalance也会借助delay watch
+   * */
   newGauge("PurgatorySize", () => watched, metricsTags)
+  /**
+   * 过期delay的大小
+   * */
   newGauge("NumDelayedOperations", () => numDelayed, metricsTags)
 
   if (reaperEnabled)
