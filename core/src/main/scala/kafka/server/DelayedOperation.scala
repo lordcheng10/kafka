@@ -159,6 +159,9 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
 
   private val metricsTags = Map("delayedOperation" -> purgatoryName)
 
+  /**
+   * 放入delay 队列的大小
+   * */
   newGauge(
     "PurgatorySize",
     new Gauge[Int] {
@@ -167,6 +170,9 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
     metricsTags
   )
 
+  /**
+   * 过期delay的大小
+   * */
   newGauge(
     "NumDelayedOperations",
     new Gauge[Int] {
@@ -215,6 +221,10 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
       // If the operation is already completed, stop adding it to the rest of the watcher list.
       if (operation.isCompleted)
         return false
+
+      /**
+       * 每次rebalance，都会join，然后都会delay  watch，因为coordinator不知道你有几个member，因此都会等
+       * */
       watchForOperation(key, operation)
 
       if (!watchCreated) {

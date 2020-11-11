@@ -110,20 +110,44 @@ class BrokerTopicMetrics(name: Option[String]) extends KafkaMetricsGroup {
     case None => Map.empty
     case Some(topic) => Map("topic" -> topic)
   }
-
+  /**
+   * messagesInRate是解压后的消息数，用的end_offset-start_offset计算出来的真实消息条目数
+   * */
   val messagesInRate = newMeter(BrokerTopicStats.MessagesInPerSec, "messages", TimeUnit.SECONDS, tags)
   val bytesInRate = newMeter(BrokerTopicStats.BytesInPerSec, "bytes", TimeUnit.SECONDS, tags)
+  /**
+   * bytesOutRate和bytesRejectedRate都是统计的解压前的数据大小.
+   * 在trunk版本中，提供了接口来获取meter对象，然后再打点：
+   * def bytesRejectedRate: Meter = metricTypeMap.get(BrokerTopicStats.BytesRejectedPerSec).meter()
+   *
+   * brokerTopicStats.topicStats(topicPartition.topic).bytesRejectedRate.mark(records.sizeInBytes)
+   * */
   val bytesOutRate = newMeter(BrokerTopicStats.BytesOutPerSec, "bytes", TimeUnit.SECONDS, tags)
   val bytesRejectedRate = newMeter(BrokerTopicStats.BytesRejectedPerSec, "bytes", TimeUnit.SECONDS, tags)
+  /**
+   * follower append时候，统计的副本入口流量
+   * */
   private[server] val replicationBytesInRate =
     if (name.isEmpty) Some(newMeter(BrokerTopicStats.ReplicationBytesInPerSec, "bytes", TimeUnit.SECONDS, tags))
     else None
+
+  /**
+   * leader统计的副本出口流量
+   * */
   private[server] val replicationBytesOutRate =
     if (name.isEmpty) Some(newMeter(BrokerTopicStats.ReplicationBytesOutPerSec, "bytes", TimeUnit.SECONDS, tags))
     else None
   val failedProduceRequestRate = newMeter(BrokerTopicStats.FailedProduceRequestsPerSec, "requests", TimeUnit.SECONDS, tags)
   val failedFetchRequestRate = newMeter(BrokerTopicStats.FailedFetchRequestsPerSec, "requests", TimeUnit.SECONDS, tags)
+  /**
+   * producer qps ,但这个qps是按照partition维度的累计的，eg：一个producerRequest有10个partition，那么这个值会统计10次
+   * 可能它想表达的是：单位时间内，这个topic或broker，有10次partiton写入
+   * */
   val totalProduceRequestRate = newMeter(BrokerTopicStats.TotalProduceRequestsPerSec, "requests", TimeUnit.SECONDS, tags)
+  /**
+   * fetch qps,和上面一样，都是partiton粒度的累加
+   * TODO-PATCH:这里也可以提下，可以直接增加一个broker维度的qps统计，是真实的request请求数
+   * */
   val totalFetchRequestRate = newMeter(BrokerTopicStats.TotalFetchRequestsPerSec, "requests", TimeUnit.SECONDS, tags)
 
   def close() {

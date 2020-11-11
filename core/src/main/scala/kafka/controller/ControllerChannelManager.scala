@@ -313,6 +313,12 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
   val updateMetadataRequestPartitionInfoMap = mutable.Map.empty[TopicPartition, PartitionStateInfo]
   private val stateChangeLogger = KafkaController.stateChangeLogger
 
+  /**
+   * 判断之前的发送请求是否发送完成：
+   * ①leader and isr;②stop replica;③更新metadata请求;
+   *
+   * 这三个结构在要发之前添加，在发送后，clear掉。不会等收到response才clear掉.
+   * */
   def newBatch() {
     // raise error if the previous batch is not empty
     if (leaderAndIsrRequestMap.nonEmpty)
@@ -362,13 +368,24 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
     }
   }
 
+  /**
+   * 一般partitions参数是不传的，只有在删除topic的时候，才会传入partition
+   * */
   /** Send UpdateMetadataRequest to the given brokers for the given partitions and partitions that are being deleted */
   def addUpdateMetadataRequestForBrokers(brokerIds: Seq[Int],
                                          partitions: collection.Set[TopicAndPartition] = Set.empty[TopicAndPartition]) {
 
     def updateMetadataRequestPartitionInfo(partition: TopicAndPartition, beingDeleted: Boolean) {
+      /**
+       * controllerContext在trunk版本是变成了AbstractControllerBrokerRequestBatch(controllerContext)定义，
+       * 这个版本是按照变量定义的。
+       * */
       val leaderIsrAndControllerEpochOpt = controllerContext.partitionLeadershipInfo.get(partition)
       leaderIsrAndControllerEpochOpt match {
+          /**
+           * trunk版本是case Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) 这样写的，
+           * 没有用@符号，scala里面@表示什么意思？
+           * */
         case Some(l @ LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) =>
           val replicas = controllerContext.partitionReplicaAssignment(partition)
 
@@ -387,6 +404,16 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
       }
     }
 
+    /**
+     * 这里主要是需要把要删除的topic partition，从partitionLeadershipInfo集合中移除，
+     * 然后把过滤后的partition leader信息发送给给定的broker节点进行更新.
+     * trunk版本中没有这个过滤操作,为什么 trunk可以不需要这个操作?因为它借助一次metadata更新，就做了两件事：
+     * ①对于不用删除的topic，更新metadata；②对于要删除的topic，通过下发metadata ，进行删除。
+     *
+     * 而在当前版本是分开做的，先把不用删除的topic metadata下发到所有broker，然后再专门把要删除的topic进行下发metadata。
+     *
+     * trunk版本的方案是通过beingDeleted赋值来实现的。
+     * */
     val filteredPartitions = {
       val givenPartitions = if (partitions.isEmpty)
         controllerContext.partitionLeadershipInfo.keySet
@@ -398,7 +425,12 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
         givenPartitions -- controller.topicDeletionManager.partitionsToBeDeleted
     }
 
+    /**
+     * 过滤出，要更新metadata的broker列表。
+     * brokerId小于0的都是非法broker，应该都不存在.
+     * */
     updateMetadataRequestBrokerSet ++= brokerIds.filter(_ >= 0)
+
     filteredPartitions.foreach(partition => updateMetadataRequestPartitionInfo(partition, beingDeleted = false))
     controller.topicDeletionManager.partitionsToBeDeleted.foreach(partition => updateMetadataRequestPartitionInfo(partition, beingDeleted = true))
   }

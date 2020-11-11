@@ -317,8 +317,17 @@ object AbstractFetcherThread {
 }
 
 object FetcherMetrics {
+  /**
+   * follower lag,在follower侧统计的
+   * */
   val ConsumerLag = "ConsumerLag"
+  /**
+   * follower请求数
+   * */
   val RequestsPerSec = "RequestsPerSec"
+  /**
+   * follower fetch bytes
+   * */
   val BytesPerSec = "BytesPerSec"
 }
 

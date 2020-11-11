@@ -617,6 +617,10 @@ class Log(@volatile var dir: File,
           // format conversion)
           if (validateAndOffsetAssignResult.messageSizeMaybeChanged) {
             for (batch <- validRecords.batches.asScala) {
+              /**
+               * batch是解压前的，是浅遍历,统计了两次:①原来的数据大小校验；②通过解压遍历等一系列逻辑后再校验；
+               * 因为有可能在解压的时候重新构建了batch
+               * */
               if (batch.sizeInBytes > config.maxMessageSize) {
                 // we record the original message set size instead of the trimmed size
                 // to be consistent with pre-compression bytesRejectedRate recording

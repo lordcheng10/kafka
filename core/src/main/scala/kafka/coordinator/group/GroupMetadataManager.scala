@@ -90,6 +90,9 @@ class GroupMetadataManager(brokerId: Int,
     }
   )
 
+  /**
+   * 有多少个group
+   * */
   newGauge("NumGroups",
     new Gauge[Int] {
       def value = groupMetadataCache.size

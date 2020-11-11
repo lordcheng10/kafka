@@ -359,7 +359,7 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
   def onBrokerStartup(newBrokers: Seq[Int]) {
     info("New broker startup callback for %s".format(newBrokers.mkString(",")))
     /**
-     *  新增broker列表
+     *  新增broker列表，可能并不"新"，比如，宕机重启的
      * */
     val newBrokersSet = newBrokers.toSet
     // send update metadata request to all live and shutting down brokers. Old brokers will get to know of the new
@@ -368,7 +368,9 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
     // common controlled shutdown case, the metadata will reach the new brokers faster
     /**
      * 给所有broker(活着的或挂掉的)都发送metadata信息，这个和trunk不一样，
-     * trunk是先给之前活着的发,再给新启的broker发
+     * trunk是先给非新增的broker发,再给新启的broker发。
+     * 因为liveOrShuttingDownBrokerIds中可能存在newBrokersSet中的broker（比如，宕机重启），
+     * 这样对于某些在newBrokersSet和liveOrShuttingDownBrokerIds都有的broker，就会发两次metadata.
      * */
     sendUpdateMetadataRequest(controllerContext.liveOrShuttingDownBrokerIds.toSeq)
     // the very first thing to do when a new broker comes up is send it the entire list of partitions that it is
@@ -1420,7 +1422,12 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
    */
   def sendUpdateMetadataRequest(brokers: Seq[Int], partitions: Set[TopicAndPartition] = Set.empty[TopicAndPartition]) {
     try {
+      /**
+       * 需要检查：之前是否有stopReplica、leaderAndIsr、metadata三类请求之前没发送完成。
+       * 如果没有发送完，那么不能发新的，这里会抛异常.
+       * */
       brokerRequestBatch.newBatch()
+
       brokerRequestBatch.addUpdateMetadataRequestForBrokers(brokers, partitions)
       brokerRequestBatch.sendRequestsToBrokers(epoch)
     } catch {
