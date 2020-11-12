@@ -450,6 +450,9 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
                                          partitions: collection.Set[TopicPartition]): Unit = {
 
     def updateMetadataRequestPartitionInfo(partition: TopicPartition, beingDeleted: Boolean): Unit = {
+      /**
+       * 在0.11.0版本controllerContext是定义的成员变量.
+       * */
       controllerContext.partitionLeadershipInfo(partition) match {
         case Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) =>
           val replicas = controllerContext.partitionReplicaAssignment(partition)
