@@ -245,12 +245,16 @@ class BrokerTopicMetrics(name: Option[String]) extends KafkaMetricsGroup {
   /**
    * producer qps ,但这个qps是按照partition维度的累计的，eg：一个producerRequest有10个partiton，那么这个值会统计10次
    * 每分钟发了几次partition 写请求
+   *
+   * 包括follower的producer request qps
    * */
   def totalProduceRequestRate: Meter = metricTypeMap.get(BrokerTopicStats.TotalProduceRequestsPerSec).meter()
 
   /**
    * fetch qps,和上面一样，都是partiton粒度的累加
    * 每分钟发了几次partition fetch请求
+   *
+   * fetch qps,和上面一样，都是partiton粒度的累加，包括follower的fetch 请求
    * TODO-PATCH:这里也可以提下，可以直接增加一个broker维度的qps统计，是真实的request请求数
    * */
   def totalFetchRequestRate: Meter = metricTypeMap.get(BrokerTopicStats.TotalFetchRequestsPerSec).meter()
