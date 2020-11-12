@@ -385,6 +385,33 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
           /**
            * trunk版本是case Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) 这样写的，
            * 没有用@符号，scala里面@表示什么意思？
+           * l @ LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch) ：
+           * 这样写表示leaderIsrAndControllerEpochOpt匹配出的l必须是LeaderIsrAndControllerEpoch类型的值，
+           * 并且还必须传入leaderAndIsr和 controllerEpoch两个参数。否则就会报错。
+           *
+           * 换句话说： case Some(l @ LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch))要匹配成功，
+           * 那么进行匹配的变量结构必须是这样的结构：外围由some包住，里面的值必须是LeaderIsrAndControllerEpoch类型，
+           * 而且LeaderIsrAndControllerEpoch类型的传入参数还需要是两个。
+           *
+           * 等同于：case l @ Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch))
+           *
+           * 但如果这样写，那么就不管Some里面的类型是啥了，都能匹配上：case l @ Some(_) 或 case Some(l)
+           *
+           * 总的一句话说，这里的@作用主要是进行强制类型检查，如果不是匹配的类型，编译就会报错.
+           * 即便前面的一个case能匹配上，编译也会报错，eg:
+           * val op = Option("bb")
+           * op match {
+           * case  Some( l)=> println(l)
+           * case  l @ Some( LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch))=> println(l)
+           * case None=> println("xx")
+           * }
+           *
+           * constructor cannot be instantiated to expected type;
+           * found   : LeaderIsrAndControllerEpoch
+           * required: String
+           * case  l @ Some( LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch))=> println(l)
+           *
+           * 这里加@进行强制类型检查，能够防止代码乌龙，还是有益处的，那么为什么trunk会干掉这个@符号呢？
            * */
         case Some(l @ LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) =>
           val replicas = controllerContext.partitionReplicaAssignment(partition)
