@@ -1428,7 +1428,11 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
        * */
       brokerRequestBatch.newBatch()
 
+      /**
+       * 这里不是真正的发送，而是放到updateMetadataRequestPartitionInfoMap中。
+       * */
       brokerRequestBatch.addUpdateMetadataRequestForBrokers(brokers, partitions)
+
       brokerRequestBatch.sendRequestsToBrokers(epoch)
     } catch {
       case e: IllegalStateException =>

@@ -412,10 +412,15 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
            * case  l @ Some( LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch))=> println(l)
            *
            * 这里加@进行强制类型检查，能够防止代码乌龙，还是有益处的，那么为什么trunk会干掉这个@符号呢？
+           *
+           * 因为这种写法就相当于类型检查了：
+           * case  Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch))
            * */
         case Some(l @ LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) =>
           val replicas = controllerContext.partitionReplicaAssignment(partition)
-
+          /**
+           * 如果是要删除的partition，那么构建的leaderIsr对象中的leader brokerId就为-2。
+           * */
           val leaderIsrAndControllerEpoch = if (beingDeleted) {
             val leaderDuringDelete = LeaderAndIsr.duringDelete(leaderAndIsr.isr)
             LeaderIsrAndControllerEpoch(leaderDuringDelete, controllerEpoch)
@@ -423,6 +428,10 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
             l
           }
 
+          /**
+           * trunk版本中，PartitionStateInfo类似这种承载类，
+           * 都是用Jackson的注解映射自动生成的类
+           * */
           val partitionStateInfo = PartitionStateInfo(leaderIsrAndControllerEpoch, replicas)
           updateMetadataRequestPartitionInfoMap.put(new TopicPartition(partition.topic, partition.partition), partitionStateInfo)
 
@@ -462,6 +471,14 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
     controller.topicDeletionManager.partitionsToBeDeleted.foreach(partition => updateMetadataRequestPartitionInfo(partition, beingDeleted = true))
   }
 
+  /**
+   * 发送请求给broker，都是按照这三个流程来发送的：
+   * 先发leaderAndIsr(内部先协商好，调班)，
+   * 然后发metadata(公布给外面，别人就会找新的工作人员来处理问题),
+   * 停止废弃replica(下掉退休人员)
+   *
+   * kafka controller和broker之间的通信，都是按照这三步来进行的。
+   * */
   def sendRequestsToBrokers(controllerEpoch: Int) {
     try {
       leaderAndIsrRequestMap.foreach { case (broker, partitionStateInfos) =>
