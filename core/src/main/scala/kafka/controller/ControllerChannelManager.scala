@@ -693,6 +693,14 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
     stopReplicaRequestMap.clear()
   }
 
+  /**
+   * 发送请求给broker，都是按照这三个流程来发送的：
+   * 先发leaderAndIsr(内部先协商好，调班)，
+   * 然后发metadata(公布给外面，别人就会找新的工作人员来处理问题),
+   * 停止废弃replica(下掉退休人员)
+   *
+   * kafka controller和broker之间的通信，都是按照这三步来进行的。
+   * */
   def sendRequestsToBrokers(controllerEpoch: Int): Unit = {
     try {
       val stateChangeLog = stateChangeLogger.withControllerEpoch(controllerEpoch)
