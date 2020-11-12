@@ -454,13 +454,37 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
        * 在0.11.0版本controllerContext是定义的成员变量.
        * */
       controllerContext.partitionLeadershipInfo(partition) match {
+          /**
+           * 这里相当于是强制类型检查，0.11.0是用@符号来进行检查的：
+           * LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)
+           * */
         case Some(LeaderIsrAndControllerEpoch(leaderAndIsr, controllerEpoch)) =>
+          /**
+           * 取出该partiton的AR
+           * */
           val replicas = controllerContext.partitionReplicaAssignment(partition)
+          /**
+           * 过滤出offline partition
+           * */
           val offlineReplicas = replicas.filter(!controllerContext.isReplicaOnline(_, partition))
+          /**
+           * 如果是正准备删除的partiton，那么构建的leaderAndIsr对象中，leader broker为-2.
+           * */
           val updatedLeaderAndIsr =
             if (beingDeleted) LeaderAndIsr.duringDelete(leaderAndIsr.isr)
             else leaderAndIsr
 
+
+          /**
+           * 在0.11.0中使用的是PartitionStateInfo来承载该信息，
+           * 但在这个版本中用了一个新的类UpdateMetadataPartitionState来承载。
+           * 这个是自动生成的类，这样在发送的时候，就不用再转化一次了。
+           *
+           * UpdateMetadataPartitionState是属于自动生成协议类里面的.
+           *
+           * Jackson类库包含了很多注解，
+           * 可以让我们快速建立Java类与JSON之间的关系。详细文档可以参考Jackson-Annotations。
+           * */
           val partitionStateInfo = new UpdateMetadataPartitionState()
             .setTopicName(partition.topic)
             .setPartitionIndex(partition.partition)
