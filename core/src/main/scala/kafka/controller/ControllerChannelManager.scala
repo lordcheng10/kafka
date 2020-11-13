@@ -703,7 +703,13 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
    * */
   def sendRequestsToBrokers(controllerEpoch: Int): Unit = {
     try {
+      /**
+       * 相对于0.11.0，这里增加了stateChangeLogger,这个类是用来打日志的，目的是为了打日志的时候，加上一个controller epoch号的前缀;
+       *
+       * 但这里每次发送都会new一个新的StateChangeLogger对象 ，感觉有问题。
+       * */
       val stateChangeLog = stateChangeLogger.withControllerEpoch(controllerEpoch)
+
       sendLeaderAndIsrRequest(controllerEpoch, stateChangeLog)
       sendUpdateMetadataRequests(controllerEpoch, stateChangeLog)
       sendStopReplicaRequests(controllerEpoch, stateChangeLog)
