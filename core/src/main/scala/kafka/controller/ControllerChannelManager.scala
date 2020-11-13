@@ -530,6 +530,9 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
        * */
       leaderAndIsrRequestMap.clear()
 
+      /***
+       * 发送metadata
+       * */
       updateMetadataRequestPartitionInfoMap.foreach(p => stateChangeLogger.trace(("Controller %d epoch %d sending UpdateMetadata request %s " +
         "to brokers %s for partition %s").format(controllerId, controllerEpoch, p._2.leaderIsrAndControllerEpoch,
         updateMetadataRequestBrokerSet.toString(), p._1)))
@@ -575,6 +578,9 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
       updateMetadataRequestBrokerSet.clear()
       updateMetadataRequestPartitionInfoMap.clear()
 
+      /**
+       * 发送stopReplica
+       * */
       stopReplicaRequestMap.foreach { case (broker, replicaInfoList) =>
         val stopReplicaWithDelete = replicaInfoList.filter(_.deletePartition).map(_.replica).toSet
         val stopReplicaWithoutDelete = replicaInfoList.filterNot(_.deletePartition).map(_.replica).toSet
