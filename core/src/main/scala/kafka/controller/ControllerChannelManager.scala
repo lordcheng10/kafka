@@ -509,6 +509,9 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
   }
 
   private def sendLeaderAndIsrRequest(controllerEpoch: Int, stateChangeLog: StateChangeLogger): Unit = {
+    /**
+     * 根据kafka版本获取对应的leaderAndIsr版本号
+     * */
     val leaderAndIsrRequestVersion: Short =
       if (config.interBrokerProtocolVersion >= KAFKA_2_4_IV1) 4
       else if (config.interBrokerProtocolVersion >= KAFKA_2_4_IV0) 3
@@ -517,9 +520,25 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
       else 0
 
     leaderAndIsrRequestMap.forKeyValue { (broker, leaderAndIsrPartitionStates) =>
+      /**
+       * 这里挂了的broker也要发吗
+       * 能发出去吗
+       * */
       if (controllerContext.liveOrShuttingDownBrokerIds.contains(broker)) {
+        /**
+         * leaderIds存了本次leaderAndIsr所携带的leader
+         * */
         val leaderIds = mutable.Set.empty[Int]
+        /**
+         * 本次请求中要切为leader的个数。
+         * 应该不一定是从follower变为leader。
+         * LeaderAndIsr请求也可能是从leader切leader吧？
+         * */
         var numBecomeLeaders = 0
+
+        /**
+         * 这里主要是填充上面两个变量
+         * */
         leaderAndIsrPartitionStates.forKeyValue { (topicPartition, state) =>
           leaderIds += state.leader
           val typeOfRequest = if (broker == state.leader) {
@@ -533,9 +552,18 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
         }
         stateChangeLog.info(s"Sending LeaderAndIsr request to broker $broker with $numBecomeLeaders become-leader " +
           s"and ${leaderAndIsrPartitionStates.size - numBecomeLeaders} become-follower partitions")
+
+        /**
+         *  将leader安装内部端口号来构建node对象。
+         * */
         val leaders = controllerContext.liveOrShuttingDownBrokers.filter(b => leaderIds.contains(b.id)).map {
           _.node(config.interBrokerListenerName)
         }
+
+
+        /**
+         *
+         * */
         val brokerEpoch = controllerContext.liveBrokerIdAndEpochs(broker)
         val leaderAndIsrRequestBuilder = new LeaderAndIsrRequest.Builder(leaderAndIsrRequestVersion, controllerId,
           controllerEpoch, brokerEpoch, leaderAndIsrPartitionStates.values.toBuffer.asJava, leaders.asJava)
@@ -545,6 +573,10 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
         })
       }
     }
+
+    /**
+     * 发送完成后，清理掉，以便下次继续发送
+     * */
     leaderAndIsrRequestMap.clear()
   }
 
@@ -707,9 +739,15 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
        * 相对于0.11.0，这里增加了stateChangeLogger,这个类是用来打日志的，目的是为了打日志的时候，加上一个controller epoch号的前缀;
        *
        * 但这里每次发送都会new一个新的StateChangeLogger对象 ，感觉有问题。
+       *
+       * 终于明白了，首先用这个类的目的是为了，打日志的时候，可以自动加上controller epoch号，而不用像之前那样进行日志拼接(很麻烦)。
+       * 但这里为了线程安全(有可能很多线程都会用这个打日志，如果每次打日志前set下logIdent变量值，那么可能其他线程下一秒就给修改了，这样就不能做到日志和epoch号的一致性)，
+       * 所以没办法只能在用的时候new下(因为这个日志类很轻，应该还好。)
        * */
       val stateChangeLog = stateChangeLogger.withControllerEpoch(controllerEpoch)
-
+      /**
+       *
+       * */
       sendLeaderAndIsrRequest(controllerEpoch, stateChangeLog)
       sendUpdateMetadataRequests(controllerEpoch, stateChangeLog)
       sendStopReplicaRequests(controllerEpoch, stateChangeLog)
