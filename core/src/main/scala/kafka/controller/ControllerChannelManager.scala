@@ -478,6 +478,24 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
    * 停止废弃replica(下掉退休人员)
    *
    * kafka controller和broker之间的通信，都是按照这三步来进行的。
+   *
+   * 有个问题，为什么controller给broker发送请求需要先放到leaderAndIsrRequestMap，然后再统一发送呢？
+   * 初步想的是，可能是因为为了统一三个请求的发送顺序，防止漏发或乱序发送了这三个请求。
+   *
+   * 这是统一操作到sendRequestsToBrokers接口的原因吧，哪又为什么需要这三个结构呢？
+   * leaderAndIsrRequestMap、updateMetadataRequestBrokerSet、stopReplicaRequestMap
+   *
+   * 这里想到了之前的newBatch()接口，在每次调用sendRequestsToBrokers前，
+   * 都会调用newBatch接口来检查下，这三个结构是否清空：leaderAndIsrRequestMap、updateMetadataRequestBrokerSet、stopReplicaRequestMap，
+   * 也就是每次调用sendRequestsToBrokers这个前，之前需要发送的都需要发送完成后，才能继续调用。
+   *
+   * 那么这三个结构的目的，应该就是为了方便判断之前的这三类请求是否发送完成
+   * （这里的发送完成是指放到对应broker的发送队列中，就算完成）
+   *
+   *
+   * 这里的队列差点和event队列搞混了，controller模块有两大块：
+   * ①事件处理模块：ControllerEventManager
+   * ②和broker之前的通信模块(channel管理模块)：ControllerChannelManager
    * */
   def sendRequestsToBrokers(controllerEpoch: Int) {
     try {
@@ -506,6 +524,10 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
           leaders.asJava)
         controller.sendRequest(broker, ApiKeys.LEADER_AND_ISR, leaderAndIsrRequest)
       }
+
+      /**
+       * leaderAndIsr发送完成后，clear掉.
+       * */
       leaderAndIsrRequestMap.clear()
 
       updateMetadataRequestPartitionInfoMap.foreach(p => stateChangeLogger.trace(("Controller %d epoch %d sending UpdateMetadata request %s " +
