@@ -374,12 +374,17 @@ class KafkaApis(val requestChannel: RequestChannel,
     //这里request.header.toStruct 每次都会new 一个struct，只是算size，不需要
     val numBytesAppended = request.header.toStruct.sizeOf + request.bodyAndSize.size
 
-    //限速、回response
+    /**
+     * 下面两种没写权限的异常response时调用
+     * */
     def sendErrorResponse(error: Errors): Unit = {
       sendResponseMaybeThrottle(request, requestThrottleMs =>
         produceRequest.getErrorResponse(requestThrottleMs, error.exception))
     }
 
+    /**
+     * 这里判断是否有权限，没权限就调用sendErrorResponse
+     * */
     if (produceRequest.isTransactional) {
       if (!authorize(request.session, Write, new Resource(TransactionalId, produceRequest.transactionalId))) {
         sendErrorResponse(Errors.TRANSACTIONAL_ID_AUTHORIZATION_FAILED)
@@ -392,11 +397,18 @@ class KafkaApis(val requestChannel: RequestChannel,
       return
     }
 
+
+    /**
+     * 这里筛选出，对该请求，有Describe权限的topic
+     * */
     val (existingAndAuthorizedForDescribeTopics, nonExistingOrUnauthorizedForDescribeTopics) =
       produceRequest.partitionRecordsOrFail.asScala.partition { case (tp, _) =>
         authorize(request.session, Describe, new Resource(Topic, tp.topic)) && metadataCache.contains(tp.topic)
       }
 
+    /**
+     * 这里从有Describe权限的topic种筛选出，对该请求，有Write权限的topic
+     * */
     val (authorizedRequestInfo, unauthorizedForWriteRequestInfo) = existingAndAuthorizedForDescribeTopics.partition {
       case (tp, _) => authorize(request.session, Write, new Resource(Topic, tp.topic))
     }
@@ -455,6 +467,9 @@ class KafkaApis(val requestChannel: RequestChannel,
         produceResponseCallback)
     }
 
+    /**
+     * 如果该请求有写权限的topic为空，那么直接回空response
+     * */
     if (authorizedRequestInfo.isEmpty)
       sendResponseCallback(Map.empty)
     else {
@@ -471,6 +486,9 @@ class KafkaApis(val requestChannel: RequestChannel,
 
       // if the request is put into the purgatory, it will have a held reference and hence cannot be garbage collected;
       // hence we clear its data here inorder to let GC re-claim its memory since it is already appended to log
+      /**
+       * 当producer放入delay queue中前，数据已经写入磁盘了，因此可以把数据置为null，方便回收.(这里触发的可能是限速或者ack delay)
+       * */
       produceRequest.clearPartitionRecords()
     }
   }

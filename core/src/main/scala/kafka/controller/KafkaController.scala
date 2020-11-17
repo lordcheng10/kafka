@@ -371,6 +371,8 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
      * trunk是先给非新增的broker发,再给新启的broker发。
      * 因为liveOrShuttingDownBrokerIds中可能存在newBrokersSet中的broker（比如，宕机重启），
      * 这样对于某些在newBrokersSet和liveOrShuttingDownBrokerIds都有的broker，就会发两次metadata.
+     *
+     *
      * */
     sendUpdateMetadataRequest(controllerContext.liveOrShuttingDownBrokerIds.toSeq)
     // the very first thing to do when a new broker comes up is send it the entire list of partitions that it is
@@ -628,6 +630,11 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
     onControllerResignation()
   }
 
+  /**
+   * 这个方法主要在发送leaderAndIsr、updateMetadata、stopReplica的时候才会调用(controller和broker之间也就这三种请求),
+   * 其中leaderAndIsr、updateMetadata都不会传callback，也就是说这两种请求不会对reponse进行处理.
+   * 但发送stopReplica的时候，有可能会发送callback，也就是说0.11.0版本对stopreplica会进行response处理，因为删除成功后，需要清理一些内存删除痕迹。
+   * */
   def sendRequest(brokerId: Int, apiKey: ApiKeys, request: AbstractRequest.Builder[_ <: AbstractRequest],
                   callback: AbstractResponse => Unit = null) = {
     controllerContext.controllerChannelManager.sendRequest(brokerId, apiKey, request, callback)
@@ -1034,6 +1041,10 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
     }
   }
 
+  /**
+   * stopReplica请求的response会的处理逻辑，就在这里。通过callback，构建一个TopicDeletionStopReplicaResult事件来进行处理：
+   * 删除内存中的delete状态。
+   * */
   case class TopicDeletionStopReplicaResult(stopReplicaResponseObj: AbstractResponse, replicaId: Int) extends ControllerEvent {
 
     def state = ControllerState.TopicDeletion

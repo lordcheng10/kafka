@@ -165,7 +165,7 @@ object RequestChannel extends Logging {
        * */
       val apiRemoteTime = nanosToMs(apiRemoteCompleteTimeNanos - apiLocalCompleteTimeNanos)
       /**
-       * 构建callback-> 放入限速delay queue：这里是限速耗时统计
+       * 构建callback-> 放入限速delay queue -> 从delayQueu中取出：这里是限速耗时统计
        * */
       val apiThrottleTime = nanosToMs(responseCompleteTimeNanos - apiRemoteCompleteTimeNanos)
 

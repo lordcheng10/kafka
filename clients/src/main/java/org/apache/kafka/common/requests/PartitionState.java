@@ -20,6 +20,15 @@ import org.apache.kafka.common.utils.Utils;
 
 import java.util.List;
 
+/**
+ * 这个类主要记录了partition的状态信息，包括:
+ * controllerEpoch版本号
+ * leaderId
+ * leader的epoch号
+ * isr列表
+ * zk的版本信息
+ * ar信息
+ * */
 public class PartitionState {
     public final int controllerEpoch;
     public final int leader;

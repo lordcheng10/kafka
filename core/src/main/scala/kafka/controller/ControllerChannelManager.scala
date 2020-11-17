@@ -237,6 +237,11 @@ class RequestSendThread(val controllerId: Int,
     var clientResponse: ClientResponse = null
     try {
       var isSendSuccessful = false
+      /**
+       * 0.11.0版本，controller给broker发送请求，如果发送失败，会一直reconnect和retry.
+       * trunk版本也是会一致retry，trunk版本会传callback方法，但这里的callback有些是null，比如发送leaderAndIsr请求，
+       * 也就是说trunk版本会对response进行处理，0.11.0版本不会
+       * */
       while (isRunning.get() && !isSendSuccessful) {
         // if a broker goes down for a long time, then at some point the controller's zookeeper listener will trigger a
         // removeBroker which will invoke shutdown() on this thread. At that point, we will stop retrying.
@@ -500,6 +505,9 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
   def sendRequestsToBrokers(controllerEpoch: Int) {
     try {
       leaderAndIsrRequestMap.foreach { case (broker, partitionStateInfos) =>
+        /**
+         * 这里只是为了打日志:那些变为leader了，那些变成follower了
+         * */
         partitionStateInfos.foreach { case (topicPartition, state) =>
           val typeOfRequest =
             if (broker == state.leaderIsrAndControllerEpoch.leaderAndIsr.leader) "become-leader"
@@ -509,10 +517,22 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
                                                                    state.leaderIsrAndControllerEpoch, broker,
                                                                    topicPartition.topic, topicPartition.partition))
         }
+
+        /**
+         * 这里过滤出，本次成为leader的brokerId。
+         * */
         val leaderIds = partitionStateInfos.map(_._2.leaderIsrAndControllerEpoch.leaderAndIsr.leader).toSet
+        /**
+         * 根据leaderId和内部listenerName构建出Node对象集合
+         * */
         val leaders = controllerContext.liveOrShuttingDownBrokers.filter(b => leaderIds.contains(b.id)).map {
           _.getNode(controller.config.interBrokerListenerName)
         }
+
+        /**
+         * 构建每个partition和partitionState的映射关系map.
+         * PartitionStateInfo类里保存的信息和PartitionState是一样的，因此两者可以相互转换
+         * */
         val partitionStates = partitionStateInfos.map { case (topicPartition, partitionStateInfo) =>
           val LeaderIsrAndControllerEpoch(leaderIsr, controllerEpoch) = partitionStateInfo.leaderIsrAndControllerEpoch
           val partitionState = new requests.PartitionState(controllerEpoch, leaderIsr.leader,
@@ -520,8 +540,14 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
             partitionStateInfo.allReplicas.map(Integer.valueOf).asJava)
           topicPartition -> partitionState
         }
+
+        /**
+         *  根据partition的状态信息、controller的brokerId、controllerEpoch号、本次涉及的leader node集合
+         *  来构建LeaderAndIsrRequest的Builder对象
+         * */
         val leaderAndIsrRequest = new LeaderAndIsrRequest.Builder(controllerId, controllerEpoch, partitionStates.asJava,
           leaders.asJava)
+
         controller.sendRequest(broker, ApiKeys.LEADER_AND_ISR, leaderAndIsrRequest)
       }
 
@@ -589,6 +615,10 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
         debug("The stop replica request (delete = false) sent to broker %d is %s"
           .format(broker, stopReplicaWithoutDelete.mkString(",")))
 
+        /**
+         * replicasToNotGroup：是r.deletePartition为true或者r.callback != null的replica副本；
+         * replicasToGroup：是r.deletePartition为false且r.callback == null的副本;
+         * */
         val (replicasToGroup, replicasToNotGroup) = replicaInfoList.partition(r => !r.deletePartition && r.callback == null)
 
         // Send one StopReplicaRequest for all partitions that require neither delete nor callback. This potentially
@@ -596,6 +626,7 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
         val stopReplicaRequest = new StopReplicaRequest.Builder(controllerId, controllerEpoch, false,
           replicasToGroup.map(r => new TopicPartition(r.replica.topic, r.replica.partition)).toSet.asJava)
         controller.sendRequest(broker, ApiKeys.STOP_REPLICA, stopReplicaRequest)
+
 
         replicasToNotGroup.foreach { r =>
           val stopReplicaRequest = new StopReplicaRequest.Builder(
