@@ -554,7 +554,7 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
           s"and ${leaderAndIsrPartitionStates.size - numBecomeLeaders} become-follower partitions")
 
         /**
-         *  将leader安装内部端口号来构建node对象。
+         *  将leader按照端口号来构建node对象。
          * */
         val leaders = controllerContext.liveOrShuttingDownBrokers.filter(b => leaderIds.contains(b.id)).map {
           _.node(config.interBrokerListenerName)

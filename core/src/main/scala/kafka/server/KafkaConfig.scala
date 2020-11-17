@@ -1720,15 +1720,25 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
   private def getInterBrokerListenerNameAndSecurityProtocol: (ListenerName, SecurityProtocol) = {
     Option(getString(KafkaConfig.InterBrokerListenerNameProp)) match {
       case Some(_) if originals.containsKey(KafkaConfig.InterBrokerSecurityProtocolProp) =>
+        /**
+         * inter.broker.listener.name和security.inter.broker.protocol只能配置一个,
+         * 那这两个有什么区别呢？
+         * */
         throw new ConfigException(s"Only one of ${KafkaConfig.InterBrokerListenerNameProp} and " +
           s"${KafkaConfig.InterBrokerSecurityProtocolProp} should be set.")
       case Some(name) =>
         val listenerName = ListenerName.normalised(name)
+        /**
+         * listenerName和SecurityProtocol有一个映射关系，所以只能配置一个。
+         * */
         val securityProtocol = listenerSecurityProtocolMap.getOrElse(listenerName,
           throw new ConfigException(s"Listener with name ${listenerName.value} defined in " +
             s"${KafkaConfig.InterBrokerListenerNameProp} not found in ${KafkaConfig.ListenerSecurityProtocolMapProp}."))
         (listenerName, securityProtocol)
       case None =>
+        /**
+         * 如果没有配置inter.broker.listener.name，那么就从security.inter.broker.protocol来进行转化
+         * */
         val securityProtocol = getSecurityProtocol(getString(KafkaConfig.InterBrokerSecurityProtocolProp),
           KafkaConfig.InterBrokerSecurityProtocolProp)
         (ListenerName.forSecurityProtocol(securityProtocol), securityProtocol)
