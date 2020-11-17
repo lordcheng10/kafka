@@ -1683,6 +1683,9 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
     }
   }
 
+  /**
+   * 如果配置了listeners，那么就读取listeners，否则就按照默认规则生成listener；
+   * */
   // If the user did not define listeners but did define host or port, let's use them in backward compatible way
   // If none of those are defined, we default to PLAINTEXT://:9092
   def listeners: Seq[EndPoint] = {
@@ -1691,12 +1694,18 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
     }.getOrElse(CoreUtils.listenerListToEndPoints("PLAINTEXT://" + hostName + ":" + port, listenerSecurityProtocolMap))
   }
 
+  /**
+   * control.plane.listener.name:根据这个配置的listerName从listers中去获取完整的listener，最终构成controller使用的listener。
+   * */
   def controlPlaneListener: Option[EndPoint] = {
     controlPlaneListenerName.map { listenerName =>
       listeners.filter(endpoint => endpoint.listenerName.value() == listenerName.value()).head
     }
   }
 
+  /**
+   * 从listeners中过滤出，没在control.plane.listener.name中的listerName，那么就是数据listener。
+   * */
   def dataPlaneListeners: Seq[EndPoint] = {
     Option(getString(KafkaConfig.ControlPlaneListenerNameProp)) match {
       case Some(controlPlaneListenerName) => listeners.filterNot(_.listenerName.value() == controlPlaneListenerName)
@@ -1704,6 +1713,11 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
     }
   }
 
+  /**
+   * 总的来说就是：
+   * 如果没配置advertised.listeners，那么就看advertised.host.name 和 advertised.port是否配置了，
+   * 如果配置了，那么就根据这两个来构建listener。如果没有配置，那么最后就只有从listeners来获取了
+   * */
   // If the user defined advertised listeners, we use those
   // If they didn't but did define advertised host or port, we'll use those and fill in the missing value from regular host / port or defaults
   // If none of these are defined, we'll use the listeners
@@ -1717,6 +1731,42 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
       listeners
   }
 
+  /**
+   * listeners: 配置Kafka使用的listener，结构是：listenerName://hostName或ip:port,eg:
+   * listeners=EXTERNAL_LISTENER_CLIENTS://阿里云ECS外网IP:9092,
+   * INTERNAL_LISTENER_CLIENTS://阿里云ECS内网IP:9093,
+   * INTERNAL_LISTENER_BROKER://阿里云ECS内网IP:9094
+   *
+   * advertised.listeners配置：
+   * ①暴露host和端口给客户端(通过注册到zk上)；
+   * ②如果没配置，会用listeners配置的；
+   * ③该配置的listener必须在listeners中有；
+   *
+   *
+   * listener.security.protocol.map：
+   * ①listerName和使用的安全协议之间的映射关系;②这里配置的listName要等于listeners中出现的listenerName;
+   *
+   * inter.broker.listener.name: ①内部broker使用的listenerName;
+   *
+   * advertised.host.name:
+   * ①这个是配置注册到zk的hostName，如果这里配置的ip，那么注册到zk的就是ip；
+   * ②这个配置是在没有配置advertised.listeners的时候才生效，如果配置了advertised.listeners，那么就会使用advertised.listeners的配置；
+   *
+   * advertised.port:
+   * ①这个是注册到zk的port；②在没有配置advertised.listeners的时候才生效，如果配置了advertised.listeners，那么就会使用advertised.listeners的配置；
+   *
+   * 总的来说就是：
+   * 如果没配置advertised.listeners，那么就看advertised.host.name 和 advertised.port是否配置了，
+   * 如果配置了，那么就根据这两个来构建listener。如果没有配置，那么最后就只有从listeners来获取了.
+   *
+   * listeners的获取规则：
+   * 如果配置了listeners，那么就读取listeners，否则就按照默认规则生成listener；
+   *
+   * control.plane.listener.name:
+   * 根据这个配置的listerName从listers中去获取完整的listener，最终构成controller使用的listener。
+   *
+   * 从listeners中过滤出，没在control.plane.listener.name中的listerName，那么就是数据listener。
+   * */
   private def getInterBrokerListenerNameAndSecurityProtocol: (ListenerName, SecurityProtocol) = {
     Option(getString(KafkaConfig.InterBrokerListenerNameProp)) match {
       case Some(_) if originals.containsKey(KafkaConfig.InterBrokerSecurityProtocolProp) =>

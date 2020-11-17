@@ -555,18 +555,28 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
 
         /**
          *  将leader按照端口号来构建node对象。
+         *  首先过滤出leader的broker，然后根据填的内部broker之间的通信协议来构建Node对象.
          * */
-        val leaders = controllerContext.liveOrShuttingDownBrokers.filter(b => leaderIds.contains(b.id)).map {
+          val leaders = controllerContext.liveOrShuttingDownBrokers.filter(b => leaderIds.contains(b.id))
+            .map {
           _.node(config.interBrokerListenerName)
         }
 
-
         /**
-         *
+         * broker其实是brokerId，从brokerId和epoch的映射中拿到对应的epoch.
          * */
         val brokerEpoch = controllerContext.liveBrokerIdAndEpochs(broker)
+
         val leaderAndIsrRequestBuilder = new LeaderAndIsrRequest.Builder(leaderAndIsrRequestVersion, controllerId,
           controllerEpoch, brokerEpoch, leaderAndIsrPartitionStates.values.toBuffer.asJava, leaders.asJava)
+
+        /**
+         * 这里往broker对应的队列放入一个leaderAndIsr请求并且构建一个回调(该回调方法里，会构建LeaderAndIsr处理事件，并放入controller的事件处理队列)，
+         * 然后下游会有发送线程从中取出，来进行发送,发送完后出发回调。
+         *
+         * trunk版本会构建对应的事件来处理对应的response，leaderAndIsr、updateMetadata、stopReplica这三类请求都会有对应事件来处理：
+         * LeaderAndIsrResponseReceived、UpdateMetadataResponseReceived、TopicDeletionStopReplicaResponseReceived
+         * */
         sendRequest(broker, leaderAndIsrRequestBuilder, (r: AbstractResponse) => {
           val leaderAndIsrResponse = r.asInstanceOf[LeaderAndIsrResponse]
           sendEvent(LeaderAndIsrResponseReceived(leaderAndIsrResponse, broker))
@@ -746,9 +756,15 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
        * */
       val stateChangeLog = stateChangeLogger.withControllerEpoch(controllerEpoch)
       /**
-       *
+       * 发送leaderAndIsr请求：放入发送队列=> 发送线程取出发送
+       * => 收到response，触发callback方法，方法里构建event事件，放入事件处理队列=>
+       * 事件处理线程取出事件，进行处理.
        * */
       sendLeaderAndIsrRequest(controllerEpoch, stateChangeLog)
+
+      /**
+       *
+       * */
       sendUpdateMetadataRequests(controllerEpoch, stateChangeLog)
       sendStopReplicaRequests(controllerEpoch, stateChangeLog)
     } catch {
