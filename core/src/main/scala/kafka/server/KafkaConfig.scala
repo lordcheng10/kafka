@@ -343,7 +343,14 @@ object KafkaConfig {
   val MaxReservedBrokerIdProp = "reserved.broker.max.id"
   val BrokerIdProp = "broker.id"
   val MessageMaxBytesProp = "message.max.bytes"
+  /**
+   * 这个是processor线程数,虽然数据流和控制流在processor层就分离了(端口也可以通过配置不同的listener进行分离)，
+   * 但是processor线程数配置还是一个配置.
+   * */
   val NumNetworkThreadsProp = "num.network.threads"
+  /**
+   * handle线程数
+   * */
   val NumIoThreadsProp = "num.io.threads"
   val BackgroundThreadsProp = "background.threads"
   val NumReplicaAlterLogDirsThreadsProp = "num.replica.alter.log.dirs.threads"

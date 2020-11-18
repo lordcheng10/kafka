@@ -356,8 +356,18 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
                                                     controllerContext: ControllerContext,
                                                     stateChangeLogger: StateChangeLogger) extends Logging {
   val controllerId: Int = config.brokerId
+  /**
+   * leaderAndIsrRequestMap用来收集需要发送leaderAndIsr请求的partition
+   * */
   val leaderAndIsrRequestMap = mutable.Map.empty[Int, mutable.Map[TopicPartition, LeaderAndIsrPartitionState]]
+  /**
+   * stopReplicaRequestMap用来收集需要发送stopReplica请求的partition
+   * */
   val stopReplicaRequestMap = mutable.Map.empty[Int, mutable.Map[TopicPartition, StopReplicaPartitionState]]
+  /**
+   * updateMetadataRequestBrokerSet用来收集需要发送metadata更新请求的broker集合；
+   * updateMetadataRequestPartitionInfoMap用来收集需要发送metadata更新请求的partition集合;
+   * */
   val updateMetadataRequestBrokerSet = mutable.Set.empty[Int]
   val updateMetadataRequestPartitionInfoMap = mutable.Map.empty[TopicPartition, UpdateMetadataPartitionState]
 
@@ -594,7 +604,14 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
     stateChangeLog.info(s"Sending UpdateMetadata request to brokers $updateMetadataRequestBrokerSet " +
       s"for ${updateMetadataRequestPartitionInfoMap.size} partitions")
 
+    /**
+     * 将updateMetadataRequestPartitionInfoMap的values转换为ArrayBuffer:
+     * ArrayBuffer(UpdateMetadataPartitionState,UpdateMetadataPartitionState,UpdateMetadataPartitionState,....)
+     * */
     val partitionStates = updateMetadataRequestPartitionInfoMap.values.toBuffer
+    /**
+     * 获取updateMetadataRequest rpc的版本号,根据不同版本号，broker接收后，应该会做不同处理.
+     * */
     val updateMetadataRequestVersion: Short =
       if (config.interBrokerProtocolVersion >= KAFKA_2_4_IV1) 6
       else if (config.interBrokerProtocolVersion >= KAFKA_2_2_IV0) 5
@@ -603,6 +620,7 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
       else if (config.interBrokerProtocolVersion >= KAFKA_0_10_0_IV1) 2
       else if (config.interBrokerProtocolVersion >= KAFKA_0_9_0) 1
       else 0
+
 
     val liveBrokers = controllerContext.liveOrShuttingDownBrokers.iterator.map { broker =>
       val endpoints = if (updateMetadataRequestVersion == 0) {
@@ -759,13 +777,24 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
        * 发送leaderAndIsr请求：放入发送队列=> 发送线程取出发送
        * => 收到response，触发callback方法，方法里构建event事件，放入事件处理队列=>
        * 事件处理线程取出事件，进行处理.
+       *
+       * leaderAndIsr的作用：
+       * ①切换leader和follower;
+       * ②
        * */
       sendLeaderAndIsrRequest(controllerEpoch, stateChangeLog)
+
+
+
+
 
       /**
        *
        * */
       sendUpdateMetadataRequests(controllerEpoch, stateChangeLog)
+
+
+
       sendStopReplicaRequests(controllerEpoch, stateChangeLog)
     } catch {
       case e: Throwable =>
