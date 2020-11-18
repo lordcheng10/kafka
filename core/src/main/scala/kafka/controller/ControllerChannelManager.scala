@@ -556,6 +556,7 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
        * */
       leaderAndIsrRequestMap.clear()
 
+
       /***
        * 发送metadata
        * */

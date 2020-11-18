@@ -633,7 +633,8 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
   /**
    * 这个方法主要在发送leaderAndIsr、updateMetadata、stopReplica的时候才会调用(controller和broker之间也就这三种请求),
    * 其中leaderAndIsr、updateMetadata都不会传callback，也就是说这两种请求不会对reponse进行处理.
-   * 但发送stopReplica的时候，有可能会发送callback，也就是说0.11.0版本对stopreplica会进行response处理，因为删除成功后，需要清理一些内存删除痕迹。
+   * 但发送stopReplica的时候，有可能会发送callback，也就是说0.11.0版本对stopreplica会进行response处理，因为删除成功后，
+   * 需要清理一些内存删除痕迹，并且要删除zk上的delete目录
    * */
   def sendRequest(brokerId: Int, apiKey: ApiKeys, request: AbstractRequest.Builder[_ <: AbstractRequest],
                   callback: AbstractResponse => Unit = null) = {
