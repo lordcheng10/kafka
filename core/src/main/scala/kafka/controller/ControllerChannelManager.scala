@@ -610,7 +610,7 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
      * */
     val partitionStates = updateMetadataRequestPartitionInfoMap.values.toBuffer
     /**
-     * 获取updateMetadataRequest rpc的版本号,根据不同版本号，broker接收后，应该会做不同处理.
+     * 获取updateMetadataRequest rpc的版本号,根据不同版本号，会做不同处理.
      * */
     val updateMetadataRequestVersion: Short =
       if (config.interBrokerProtocolVersion >= KAFKA_2_4_IV1) 6
@@ -622,10 +622,19 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
       else 0
 
 
+    /**
+     *
+     * */
     val liveBrokers = controllerContext.liveOrShuttingDownBrokers.iterator.map { broker =>
       val endpoints = if (updateMetadataRequestVersion == 0) {
+        /**
+         * 0.9.0之前的版本只能支持PLAINTEXT
+         * */
         // Version 0 of UpdateMetadataRequest only supports PLAINTEXT
         val securityProtocol = SecurityProtocol.PLAINTEXT
+        /**
+         * 通过安全协议转换为listenerName
+         * */
         val listenerName = ListenerName.forSecurityProtocol(securityProtocol)
         val node = broker.node(listenerName)
         Seq(new UpdateMetadataEndpoint()
@@ -648,16 +657,43 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
         .setRack(broker.rack.orNull)
     }.toBuffer
 
+    /**
+     *  Set.intersect求两个集合的交集,因为如果不是我们broker列表里面的节点，是不需要发送metadata的。
+     *  然后遍历每个交集中的节点，构建metadata请求，这里有个问题，
+     *  构建metadata请求的brokerEpoch是从liveBroker中获取的,那么如果交集中的某个节点是downbroker呢，已经是挂掉的broker，
+     *  那么controllerContext.liveBrokerIdAndEpochs(broker)获取的就是null，这样是不是有问题？
+     *  controllerContext.liveBrokerIdAndEpochs是一个map，它的定义是：
+     *  private val liveBrokerEpochs = mutable.Map.empty[Int, Long]
+     *  从中获取元素可以有两种方式：liveBrokerEpochs.get(3) 或 liveBrokerEpochs(3)
+     *  liveBrokerEpochs(3)获取会抛异常。
+     *  所以这里如果broker在liveBrokerIdAndEpochs中不存在，那么这里会抛异常:
+     *      Exception in thread "main" java.util.NoSuchElementException: key not found: 3
+     *      at scala.collection.MapLike$class.default(MapLike.scala:228)
+     *      at scala.collection.AbstractMap.default(Map.scala:59)
+     *      at scala.collection.mutable.HashMap.apply(HashMap.scala:65)
+     *      at Test1$.main(Test1.scala:16)
+     *      at Test1.main(Test1.scala)
+     *
+     *   有没有可能存在一个broker，在liveOrShuttingDownBrokerIds和updateMetadataRequestBrokerSet中，
+     *   但是不在liveBrokerIdAndEpochs中。
+     *
+     *
+     * */
     updateMetadataRequestBrokerSet.intersect(controllerContext.liveOrShuttingDownBrokerIds).foreach { broker =>
       val brokerEpoch = controllerContext.liveBrokerIdAndEpochs(broker)
+
       val updateMetadataRequestBuilder = new UpdateMetadataRequest.Builder(updateMetadataRequestVersion,
         controllerId, controllerEpoch, brokerEpoch, partitionStates.asJava, liveBrokers.asJava)
+
+
       sendRequest(broker, updateMetadataRequestBuilder, (r: AbstractResponse) => {
         val updateMetadataResponse = r.asInstanceOf[UpdateMetadataResponse]
         sendEvent(UpdateMetadataResponseReceived(updateMetadataResponse, broker))
       })
 
     }
+
+
     updateMetadataRequestBrokerSet.clear()
     updateMetadataRequestPartitionInfoMap.clear()
   }
