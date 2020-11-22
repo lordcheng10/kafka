@@ -74,7 +74,11 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
    */
   def startup() {
     this.synchronized {
-
+      /**
+       * 链接配额,本版本是把总的最大链接数
+       * 和单ip的最大链接数传入进去了。
+       * trunk版本，是传入的配置config和metric
+       * */
       connectionQuotas = new ConnectionQuotas(maxConnectionsPerIp, maxConnectionsPerIpOverrides)
 
       val sendBufferSize = config.socketSendBufferBytes
@@ -82,6 +86,14 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
       val brokerId = config.brokerId
 
       var processorBeginIndex = 0
+      /**
+       * 一个EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol)对于一个acceptor，
+       * 一个acceptor对应多个processor；
+       *
+       *
+       * 那么有个问题，如果我配置多个不同的listenerName，port相同，那么会不会有问题？
+       * 同一个端口有两套acceptor和processor，来了一个包，怎么接收呢？
+       * */
       config.listeners.foreach { endpoint =>
         val listenerName = endpoint.listenerName
         val securityProtocol = endpoint.securityProtocol
