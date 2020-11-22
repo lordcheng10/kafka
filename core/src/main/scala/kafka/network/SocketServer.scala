@@ -123,7 +123,21 @@ class SocketServer(val config: KafkaConfig,
    */
   def startup(startProcessingRequests: Boolean = true): Unit = {
     this.synchronized {
+      /**
+       * 链接配额,0.11.0版本是把总的最大链接数
+       * 和单ip的最大链接数传入进去了。
+       * 本版本，是传入的配置config和metric
+       * */
       connectionQuotas = new ConnectionQuotas(config, time, metrics)
+
+      /**
+       * 对于提供给外部使用的lister(或者叫数据端口)来说，一个EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol)
+       * 会对应一个acceptor，一个acceptor会对应多个processor。
+       *
+       * 但是对应controller到broker的内部通信用的listener来说，
+       * 一个EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol)
+       * 对应一个acceptor，一个acceptor只对应一个processor，注意到，这里的processor个数只有一个，和外部listener通道是不同的。
+       * */
       createControlPlaneAcceptorAndProcessor(config.controlPlaneListener)
       createDataPlaneAcceptorsAndProcessors(config.numNetworkThreads, config.dataPlaneListeners)
       if (startProcessingRequests) {
