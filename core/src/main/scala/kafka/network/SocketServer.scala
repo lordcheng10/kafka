@@ -124,7 +124,8 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
         Utils.newThread(s"kafka-socket-acceptor-$listenerName-$securityProtocol-${endpoint.port}", acceptor, false).start()
 
         /**
-         * 这里等待acceptor启动完成，才能启动下一个，为什么呢?
+         * 这里等待acceptor启动完成，才能启动下一个，为什么呢? 我理解他是想等这个listener端口绑定注册到select后才能继续下一个accptor的创建。
+         * 似乎是为了防止同一个端口被同时绑定到多个acceptor。(如果端口配置错误)
          * */
         acceptor.awaitStartup()
 
