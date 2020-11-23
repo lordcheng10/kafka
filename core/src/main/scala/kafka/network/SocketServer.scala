@@ -93,21 +93,44 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
        *
        * 那么有个问题，如果我配置多个不同的listenerName，port相同，那么会不会有问题？
        * 同一个端口有两套acceptor和processor，来了一个包，怎么接收呢？
+       *
+       * 添加配置的时候进行了校验，这种配置会报错 启动不起来。
+       * 同一个listenerName对应多个端口，一个端口对应多个listenerName都是非法配置，会校验，启动报错
        * */
       config.listeners.foreach { endpoint =>
         val listenerName = endpoint.listenerName
         val securityProtocol = endpoint.securityProtocol
         val processorEndIndex = processorBeginIndex + numProcessorThreads
 
+        /**
+         *  processorBeginIndex主要是为了让所有listener的processor线程编号依次递增.
+         * */
         for (i <- processorBeginIndex until processorEndIndex)
           processors(i) = newProcessor(i, connectionQuotas, listenerName, securityProtocol)
 
+        /**
+         * 通过processors.slice将这个acceptor对应的processor传入给它
+         * */
         val acceptor = new Acceptor(endpoint, sendBufferSize, recvBufferSize, brokerId,
           processors.slice(processorBeginIndex, processorEndIndex), connectionQuotas)
+
+
+        /**
+         * 构建端口和acceptor的映射
+         * */
         acceptors.put(endpoint, acceptor)
+
+
         Utils.newThread(s"kafka-socket-acceptor-$listenerName-$securityProtocol-${endpoint.port}", acceptor, false).start()
+
+        /**
+         * 这里等待acceptor启动完成，才能启动下一个，为什么呢?
+         * */
         acceptor.awaitStartup()
 
+        /**
+         * 更新下，下个端口的processor的开始编号
+         * */
         processorBeginIndex = processorEndIndex
       }
     }

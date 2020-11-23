@@ -262,6 +262,9 @@ object CoreUtils extends Logging {
       val distinctPorts = portsExcludingZero.distinct
       val distinctListenerNames = endPoints.map(_.listenerName).distinct
 
+      /**
+       * 这里对同一个端口对应不同listenerName和同一个listenerName对应不同端口这两种错误配置，进行了校验
+       * */
       require(distinctPorts.size == portsExcludingZero.size, s"Each listener must have a different port, listeners: $listeners")
       require(distinctListenerNames.size == endPoints.size, s"Each listener must have a different name, listeners: $listeners")
     }
