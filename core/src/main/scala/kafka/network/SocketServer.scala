@@ -1295,8 +1295,17 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
 
   @volatile private var defaultMaxConnectionsPerIp: Int = config.maxConnectionsPerIp
   @volatile private var maxConnectionsPerIpOverrides = config.maxConnectionsPerIpOverrides.map { case (host, count) => (InetAddress.getByName(host), count) }
+  /**
+   * brokerMaxConnections: 总的最大连接数,0.11.0版本没有这个配置。
+   * 之前只对单ip维度做连接数的限制。
+   * */
   @volatile private var brokerMaxConnections = config.maxConnections
+
   private val interBrokerListenerName = config.interBrokerListenerName
+
+  /**
+   * 统计每个地址当前的链接数,0.11.0也有
+   * */
   private val counts = mutable.Map[InetAddress, Int]()
 
   // Listener counts and configs are synchronized on `counts`
@@ -1433,9 +1442,18 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
       totalCount < brokerMaxConnections
   }
 
+  /**
+   * 只有当配置了多listener且多listener生效的时候listenerCounts.size > 1(业务开始链接不同listener的时候)，才说得上是否保护该listener。
+   * 否则的话，就没有是否要保护一说。
+   *
+   * 如果返回true，表示该listenerName是受保护的(内部listenerName)，此时不受最大连接数限制
+   * */
   private def protectedListener(listenerName: ListenerName): Boolean =
     interBrokerListenerName == listenerName && listenerCounts.size > 1
 
+  /**
+   *
+   * */
   private def maxListenerConnections(listenerName: ListenerName): Int =
     maxConnectionsPerListener.get(listenerName).map(_.maxConnections).getOrElse(Int.MaxValue)
 
