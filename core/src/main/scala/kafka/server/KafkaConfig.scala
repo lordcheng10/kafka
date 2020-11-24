@@ -235,6 +235,7 @@ object KafkaConfig {
   /**
    * 这个是processor线程数,虽然数据流和控制流在processor层就分离了(端口也可以通过配置不同的listener进行分离)，
    * 但是processor线程数配置还是一个配置.
+   * 这是单个端口对应的processor线程数。
    * */
   val NumNetworkThreadsProp = "num.network.threads"
   /**

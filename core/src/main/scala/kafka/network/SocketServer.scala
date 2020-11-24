@@ -100,10 +100,16 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
       config.listeners.foreach { endpoint =>
         val listenerName = endpoint.listenerName
         val securityProtocol = endpoint.securityProtocol
+        /**
+         * 在开始位置+上processor线程数，得到end位置。
+         * */
         val processorEndIndex = processorBeginIndex + numProcessorThreads
 
         /**
          *  processorBeginIndex主要是为了让所有listener的processor线程编号依次递增.
+         *
+         *  所有listener对应的processor都放到了一个数组中：
+         * private val processors = new Array[Processor](totalProcessorThreads)
          * */
         for (i <- processorBeginIndex until processorEndIndex)
           processors(i) = newProcessor(i, connectionQuotas, listenerName, securityProtocol)
@@ -120,7 +126,11 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
          * */
         acceptors.put(endpoint, acceptor)
 
-
+        /**
+         * 这里创建一个线程，但是这个线程创建后run起来就不管了，并且daemon设置为false代表，shutdown的时候，需要阻塞shutdown流程.
+         * 也就是说守护线程，不会阻塞主线程shutdown.
+         * 虽然没有持有这个线程，但是我们持有这个线程执行的任务，通过shutdown这个任务就可以shutdown这个线程
+         * */
         Utils.newThread(s"kafka-socket-acceptor-$listenerName-$securityProtocol-${endpoint.port}", acceptor, false).start()
 
         /**
@@ -136,12 +146,20 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
       }
     }
 
+
     newGauge("NetworkProcessorAvgIdlePercent",
       new Gauge[Double] {
+        /**
+         * ioWaitRatioMetricNames记录每个processor的select key的等待时间(如果没有ready的key会等待)
+         * */
         private val ioWaitRatioMetricNames = processors.map { p =>
           metrics.metricName("io-wait-ratio", "socket-server-metrics", p.metricTags)
         }
 
+        /**
+         * 这里是计算平均每个processor线程的等待时间.
+         * 包括所有listener对应的processor
+         * */
         def value = ioWaitRatioMetricNames.map { metricName =>
           Option(metrics.metric(metricName)).fold(0.0)(_.value)
         }.sum / totalProcessorThreads
@@ -660,10 +678,20 @@ private[kafka] class Processor(val id: Int,
 }
 
 class ConnectionQuotas(val defaultMax: Int, overrideQuotas: Map[String, Int]) {
-
+  /**
+   * 转化成<ip,maxCount>的映射，这个是记录了每个ip最多可以有的链接数
+   * */
   private val overrides = overrideQuotas.map { case (host, count) => (InetAddress.getByName(host), count) }
+
+  /**
+   * 每个ip目前实际的连接数
+   * */
   private val counts = mutable.Map[InetAddress, Int]()
 
+
+  /**
+   * 对给定访问的ip进行叠加计数
+   * */
   def inc(address: InetAddress) {
     counts.synchronized {
       val count = counts.getOrElseUpdate(address, 0)
@@ -674,6 +702,9 @@ class ConnectionQuotas(val defaultMax: Int, overrideQuotas: Map[String, Int]) {
     }
   }
 
+  /**
+   * 对给定访问的ip进行计数
+   * */
   def dec(address: InetAddress) {
     counts.synchronized {
       val count = counts.getOrElse(address,
@@ -685,6 +716,10 @@ class ConnectionQuotas(val defaultMax: Int, overrideQuotas: Map[String, Int]) {
     }
   }
 
+
+  /**
+   * 获取当前计数
+   * */
   def get(address: InetAddress): Int = counts.synchronized {
     counts.getOrElse(address, 0)
   }
