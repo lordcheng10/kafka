@@ -1146,6 +1146,11 @@ private[kafka] class Processor(val id: Int,
   }
 
   private def closeExcessConnections(): Unit = {
+    /**
+     * 如果某个listenerName超过链接数quota，
+     * 那么这个listenerName对应的processor在判断出，自己所在的listenerName的连接过多后，
+     * 会将优先级最低的连接给关闭掉(lru算法，找出最近最久未访问的连接)
+     * */
     if (connectionQuotas.maxConnectionsExceeded(listenerName)) {
       val channel = selector.lowestPriorityChannel()
       if (channel != null)
@@ -1301,6 +1306,9 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
    * */
   @volatile private var brokerMaxConnections = config.maxConnections
 
+  /**
+   * 这个主要是用来判断是否是受保护的listenerName，如果是受保护的，就不会受链接限制
+   * */
   private val interBrokerListenerName = config.interBrokerListenerName
 
   /**
@@ -1433,6 +1441,11 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
     totalCount > brokerMaxConnections && !protectedListener(listenerName)
   }
 
+  /**
+   * connection资源(slot)不可获取有两种情况：
+   * ①该listenerName使用的连接数>= 该listenerName对应的连接数阀值；
+   * ②总的连接数超过了最大连接数阀值，且不是受保护的listenerName(内部listenerName)
+   * */
   private def connectionSlotAvailable(listenerName: ListenerName): Boolean = {
     if (listenerCounts(listenerName) >= maxListenerConnections(listenerName))
       false
