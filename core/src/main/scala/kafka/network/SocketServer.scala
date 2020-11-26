@@ -1450,7 +1450,6 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
         do {
           counts.wait(remainingThrottleTimeMs)
           remainingThrottleTimeMs = math.max(endThrottleTimeMs - time.milliseconds, 0)
-          println(s"remainingThrottleTimeMs ${remainingThrottleTimeMs}")
         } while (remainingThrottleTimeMs > 0 || !connectionSlotAvailable(listenerName))
         acceptorBlockedPercentMeter.mark(time.nanoseconds - startNs)
       }
@@ -1475,8 +1474,6 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
       true
     else
       totalCount < brokerMaxConnections
-
-    false
   }
 
   /**
