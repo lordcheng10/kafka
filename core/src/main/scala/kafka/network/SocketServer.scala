@@ -1327,6 +1327,11 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
 
   def inc(listenerName: ListenerName, address: InetAddress, acceptorBlockedPercentMeter: com.yammer.metrics.core.Meter): Unit = {
     counts.synchronized {
+      /**
+       * 当连接数quota超过阀值的时候，就会等待，这里的等待是阻塞等待(死等)，
+       * 因为该acceptor线程对应的listenerName连接数已经达到阀值了，
+       * 所以后面新来的连接都只能阻塞等待。
+       * */
       waitForConnectionSlot(listenerName, acceptorBlockedPercentMeter)
 
       val count = counts.getOrElseUpdate(address, 0)
@@ -1349,6 +1354,9 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
     maxConnectionsPerIpOverrides = overrideQuotas.map { case (host, count) => (InetAddress.getByName(host), count) }
   }
 
+  /**
+   * 动态更新配置的时候唤醒，超过quota时等待的acceptor线程
+   * */
   private[network] def updateBrokerMaxConnections(maxConnections: Int): Unit = {
     counts.synchronized {
       brokerMaxConnections = maxConnections
@@ -1382,7 +1390,13 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
         // once listener is removed from maxConnectionsPerListener, no metrics will be recorded into listener's sensor
         // so it is safe to remove sensor here
         listenerQuota.close()
+        /**
+         * 移除前，唤醒该listener对应等待的acceptor
+         * */
         counts.notifyAll() // wake up any waiting acceptors to close cleanly
+        /**
+         * 移掉动态配置
+         * */
         config.removeReconfigurable(listenerQuota)
       }
     }
@@ -1408,6 +1422,9 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
         else
           listenerCounts.put(listenerName, listenerCount - 1)
       }
+      /**
+       * 有链接被关闭的时候，也会唤醒，最多也就等待1个，因为对应的acceptor只有一个线程，一旦等待也就卡死了
+       * */
       counts.notifyAll() // wake up any acceptors waiting to process a new connection since listener connection limit was reached
     }
   }
@@ -1425,10 +1442,15 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
       if (throttleTimeMs > 0 || !connectionSlotAvailable(listenerName)) {
         val startNs = time.nanoseconds
         val endThrottleTimeMs = startThrottleTimeMs + throttleTimeMs
+        /**
+         * 这里当remainingThrottleTimeMs变为0后，会导致疯狂循环?
+         * cpu直接打没？0是死等,那这个时候 谁唤醒它呢
+         * */
         var remainingThrottleTimeMs = throttleTimeMs
         do {
           counts.wait(remainingThrottleTimeMs)
           remainingThrottleTimeMs = math.max(endThrottleTimeMs - time.milliseconds, 0)
+          println(s"remainingThrottleTimeMs ${remainingThrottleTimeMs}")
         } while (remainingThrottleTimeMs > 0 || !connectionSlotAvailable(listenerName))
         acceptorBlockedPercentMeter.mark(time.nanoseconds - startNs)
       }
@@ -1453,6 +1475,8 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
       true
     else
       totalCount < brokerMaxConnections
+
+    false
   }
 
   /**
