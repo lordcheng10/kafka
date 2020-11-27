@@ -891,6 +891,9 @@ class DynamicClientQuotaCallback(brokerId: Int, server: KafkaServer) extends Rec
   }
 }
 
+/**
+ * 动态修改listenerName
+ * */
 class DynamicListenerConfig(server: KafkaServer) extends BrokerReconfigurable with Logging {
 
   override def reconfigurableConfigs: Set[String] = {
@@ -923,6 +926,9 @@ class DynamicListenerConfig(server: KafkaServer) extends BrokerReconfigurable wi
       throw new ConfigException(s"Advertised listener must be specified for inter-broker listener ${newConfig.interBrokerListenerName}")
   }
 
+  /**
+   * 动态更新listernner配置
+   * */
   def reconfigure(oldConfig: KafkaConfig, newConfig: KafkaConfig): Unit = {
     val newListeners = newConfig.listeners
     val newListenerMap = listenersToMap(newListeners)
