@@ -381,6 +381,9 @@ class SocketServer(val config: KafkaConfig,
     }
   }
 
+  /**
+   * 支持动态更新listenerName
+   * */
   def removeListeners(listenersRemoved: Seq[EndPoint]): Unit = synchronized {
     info(s"Removing data-plane listeners for endpoints $listenersRemoved")
     listenersRemoved.foreach { endpoint =>
@@ -1355,7 +1358,7 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
   }
 
   /**
-   * 动态更新配置的时候唤醒，超过quota时等待的acceptor线程
+   * 动态更新配置的时候唤醒超过quota时等待的acceptor线程
    * */
   private[network] def updateBrokerMaxConnections(maxConnections: Int): Unit = {
     counts.synchronized {
@@ -1391,7 +1394,7 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
         // so it is safe to remove sensor here
         listenerQuota.close()
         /**
-         * 移除前，唤醒该listener对应等待的acceptor
+         * 移除前，唤醒所有等待的acceptor，然后各自acceptor会去检查自己的quota是否有多余的
          * */
         counts.notifyAll() // wake up any waiting acceptors to close cleanly
         /**
@@ -1423,7 +1426,7 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
           listenerCounts.put(listenerName, listenerCount - 1)
       }
       /**
-       * 有链接被关闭的时候，也会唤醒，最多也就等待1个，因为对应的acceptor只有一个线程，一旦等待也就卡死了
+       * 有链接被关闭的时候，也会唤醒，最多也就等待1个，因为对应的acceptor只有一个线程，一旦等待也就卡死了.
        * */
       counts.notifyAll() // wake up any acceptors waiting to process a new connection since listener connection limit was reached
     }
@@ -1444,7 +1447,10 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
         val endThrottleTimeMs = startThrottleTimeMs + throttleTimeMs
         /**
          * 这里当remainingThrottleTimeMs变为0后，会导致疯狂循环?
-         * cpu直接打没？0是死等,那这个时候 谁唤醒它呢
+         * cpu直接打没？0是死等,那这个时候 谁唤醒它呢？
+         * 注意这里只是唤醒，唤醒后还是会去检查所对应的listenerName的可用链接slot是否有多余的。
+         * ①链接关闭或断开链接的时候；②动态更新链接数上限的时候；③启动添加listerName的时候;
+         * ④移除listernnerName时候(动态修改了listenerName，导致一些listenerName下线)
          * */
         var remainingThrottleTimeMs = throttleTimeMs
         do {
