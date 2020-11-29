@@ -1299,13 +1299,25 @@ private[kafka] class Processor(val id: Int,
   }
 }
 
+/**
+ * 0.11.0版本只有客户端ip维度的连接数阈值设定。
+ * trunk版本有服务端broker总体连接数阈值、客户端单ip连接数阈值、单listerName连接数阈值三类限定，更加丰富.
+ * */
 class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extends Logging with AutoCloseable {
 
+  /**
+   * maxConnectionsPerIpOverrides是客户端ip维度的连接数阈值，如果没有覆盖配置的话（应该是类似topic数据保留时间那种动态设置覆盖默认配置的方式），
+   * 就使用这个defaultMaxConnectionsPerIp（这个就类似topic的写在配置文件里面的数据保留时间）作为阈值
+   *
+   * 这两个值和  private val counts = mutable.Map[InetAddress, Int]()对应，counts是ip维度的计数统计
+   * */
   @volatile private var defaultMaxConnectionsPerIp: Int = config.maxConnectionsPerIp
   @volatile private var maxConnectionsPerIpOverrides = config.maxConnectionsPerIpOverrides.map { case (host, count) => (InetAddress.getByName(host), count) }
   /**
    * brokerMaxConnections: 总的最大连接数,0.11.0版本没有这个配置。
    * 之前只对单ip维度做连接数的限制。
+   *
+   * 这个是broker维度总的连接数阈值，和  @volatile private var totalCount = 0对应
    * */
   @volatile private var brokerMaxConnections = config.maxConnections
 
@@ -1315,13 +1327,21 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
   private val interBrokerListenerName = config.interBrokerListenerName
 
   /**
-   * 统计每个地址当前的链接数,0.11.0也有
+   * 统计每个地址当前的链接数,0.11.0也有，注意这个是单ip维度的连接数计数，不是ip+端口维度的计数
    * */
   private val counts = mutable.Map[InetAddress, Int]()
 
+  /**
+   * listenerCounts是listerName维度的链接数计数，实际就是ip+port的连接数计数
+   * maxConnectionsPerListener是listerName维度的最大连接数
+   * */
   // Listener counts and configs are synchronized on `counts`
   private val listenerCounts = mutable.Map[ListenerName, Int]()
   private[network] val maxConnectionsPerListener = mutable.Map[ListenerName, ListenerConnectionQuota]()
+
+  /**
+   * totalCount是服务端总的连接数计数.
+   * */
   @volatile private var totalCount = 0
 
   // sensor that tracks broker-wide connection creation rate and limit (quota)
@@ -1344,6 +1364,12 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
         listenerCounts.put(listenerName, listenerCounts(listenerName) + 1)
       }
       val max = maxConnectionsPerIpOverrides.getOrElse(address, defaultMaxConnectionsPerIp)
+      /**
+       * 前面不是等着有资源了，才放行的吗 为啥这里还可能抛异常呢?
+       * 前面判断是否有可用的slot资源是使用的listerName的当前连接数 和单个listerName的最大连接数来判断的。
+       * 而这里是按照某个ip维度来check的，也就是说，某个ip客户端可能有多个端口过来的链接，
+       * 我们不单有ip:port维度的连接数限制，还有ip维度的链接数限制，甚至还有服务端总连接数限制.
+       * */
       if (count >= max)
         throw new TooManyConnectionsException(address, max)
     }
@@ -1457,6 +1483,10 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
           counts.wait(remainingThrottleTimeMs)
           remainingThrottleTimeMs = math.max(endThrottleTimeMs - time.milliseconds, 0)
         } while (remainingThrottleTimeMs > 0 || !connectionSlotAvailable(listenerName))
+
+        /**
+         * 接收链接耗时(主要是等待connection slot资源)
+         * */
         acceptorBlockedPercentMeter.mark(time.nanoseconds - startNs)
       }
     }
