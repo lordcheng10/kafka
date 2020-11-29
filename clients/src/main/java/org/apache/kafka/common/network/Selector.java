@@ -237,6 +237,9 @@ public class Selector implements Selectable, AutoCloseable {
      */
     @Override
     public void wakeup() {
+        /**
+         * 这里仅仅是为了唤醒，如果此时processor处于this.nioSelector.select(ms)阻塞状态.
+         * */
         this.nioSelector.wakeup();
     }
 

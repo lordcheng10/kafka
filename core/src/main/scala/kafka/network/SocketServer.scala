@@ -391,23 +391,61 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
   def accept(key: SelectionKey, processor: Processor) {
     val serverSocketChannel = key.channel().asInstanceOf[ServerSocketChannel]
     val socketChannel = serverSocketChannel.accept()
+    /**
+     * socketChannel = serverSocketChannel.accept()这里就已经和客户端建立链接了，
+     * 下面再判断是否超过connection quota，如果超过就死等有可用的slot的时候，
+     * 就不会说出现链接超时了，因为是先建立链接，再判断是否超过，超过就死等资源释放。
+     * 当然超过死等，是trunk版本的逻辑，在0.11.0版本，还是通过抛异常来解决的，抛异常然后关闭链接.
+     * */
     try {
       connectionQuotas.inc(socketChannel.socket().getInetAddress)
+      /**
+       * socketChannel.configureBlocking(false)是设置nio的非阻塞模式，非阻塞模式下，read() write() connect() 调用这些方法时，
+       * 可能等待到结果就返回了，也就是说这些接口不是阻塞的。
+       *
+       *
+       * socketChannel.socket().setTcpNoDelay(true)关闭tcp缓冲，
+       * 目的是确保数据及时发送给客户端，主要是为了减少延迟，不然会影响业务或者内部通信延迟.
+       *
+       *
+       * socketChannel.socket().setKeepAlive(true) 这个设置为true是为了解决客户端异常宕机等情况下，释放连接用的.
+       * 当设置为true时，如果客户端长时间不发送数据，那么服务端会发送一些ack探测包来确认客户的是否挂掉了(可能是断网等)，
+       * 如果探测是挂掉了，会释放掉这个连接。所以如果不设置为true的话，这些失效的连接就会一直保持。
+       * 另外，客户端也可以设置这个参数为true，来探测服务端是否挂了.参考：https://blog.csdn.net/huang_xw/article/details/7338663
+       * */
       socketChannel.configureBlocking(false)
       socketChannel.socket().setTcpNoDelay(true)
       socketChannel.socket().setKeepAlive(true)
+
+      /**
+       * sendBufferSize如果为-1的话，那么久表示使用默认的send buffer大小
+       * */
       if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
         socketChannel.socket().setSendBufferSize(sendBufferSize)
+
 
       debug("Accepted connection from %s on %s and assigned it to processor %d, sendBufferSize [actual|requested]: [%d|%d] recvBufferSize [actual|requested]: [%d|%d]"
             .format(socketChannel.socket.getRemoteSocketAddress, socketChannel.socket.getLocalSocketAddress, processor.id,
                   socketChannel.socket.getSendBufferSize, sendBufferSize,
                   socketChannel.socket.getReceiveBufferSize, recvBufferSize))
 
+      /**
+       * 将新的链接添加到processor线程中（其实就是放到该线程的newConnections集合中），
+       * 并且此时唤醒processor，如果此时它正处于select(ms)阻塞状态的话.
+       * */
       processor.accept(socketChannel)
     } catch {
       case e: TooManyConnectionsException =>
         info("Rejected connection from %s, address already has the configured maximum of %d connections.".format(e.ip, e.count))
+        /**
+         * 如果      connectionQuotas.inc(socketChannel.socket().getInetAddress)判断出超过最大连接数了，
+         * 那么会抛出一个TooManyConnectionsException异常，然后在这里关闭链接处理。
+         * 但这种处理方式，关闭后，客户端可能源源不断的继续发链接请求过来，不是特别好。最好的是像trunk版本那样，
+         * acceptor线程阻塞等待，等待有可用的链接slot释放出来，而不是抛异常，这样就更优雅点。
+         *
+         * 这里在关闭链接的时候，会释放一个slot,因为在之前判断时候，已经加进去了(因为真实的链接就已经加上了).
+         * 注意这里的操作是单线程的，所以不存在多个线程同时加减的问题.
+         * */
         close(socketChannel)
     }
   }
@@ -618,6 +656,13 @@ private[kafka] class Processor(val id: Int,
    */
   def accept(socketChannel: SocketChannel) {
     newConnections.add(socketChannel)
+    /**
+     * 这里是为了唤醒processor线程，因为processor线程有可能此时在
+     * return this.nioSelector.select(ms)的时候暂时阻塞住了(processor目前只有这里会阻塞)
+     * 这里的wakeup实际里面调用的是this.nioSelector.wakeup()。
+     * 虽然this.nioSelector.select(ms)并不会阻塞太久,代码写死的是300ms，
+     * 但是为了极大的提高吞吐，这里还是及时去唤醒下，因为此时processor有事情处理了，它此时需要处理链接请求.
+     * */
     wakeup()
   }
 
@@ -690,13 +735,19 @@ class ConnectionQuotas(val defaultMax: Int, overrideQuotas: Map[String, Int]) {
 
 
   /**
-   * 对给定访问的ip进行叠加计数
+   * 对给定访问的ip进行叠加计数.
+   * 在trunk版本中当连接数超过阈值时，不是单纯的抛异常，
+   * 而是会wait等待，防止客户端频繁发送链接请求.
    * */
   def inc(address: InetAddress) {
     counts.synchronized {
       val count = counts.getOrElseUpdate(address, 0)
       counts.put(address, count + 1)
       val max = overrides.getOrElse(address, defaultMax)
+      /**
+       * 先加，后判断，因为在此之前，这个链接已经加进来了。
+       * 超过后，抛异常出去，在外边，关闭的时候，又会再减一次，太多余了.
+       * */
       if (count >= max)
         throw new TooManyConnectionsException(address, max)
     }
