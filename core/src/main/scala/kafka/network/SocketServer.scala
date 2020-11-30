@@ -87,7 +87,7 @@ class SocketServer(val config: KafkaConfig, val metrics: Metrics, val time: Time
 
       var processorBeginIndex = 0
       /**
-       * 一个EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol)对于一个acceptor，
+       * 一个EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol)对应一个acceptor，
        * 一个acceptor对应多个processor；
        *
        *
@@ -307,6 +307,19 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
   private val nioSelector = NSelector.open()
   val serverChannel = openServerSocket(endPoint.host, endPoint.port)
 
+  /**
+   * 在new acceptor的时候，就会start processor。
+   * 启动顺序socketServer.startup() {
+   *   new acceptor(){
+   *      processor.start()
+   *   }
+   *
+   *   acceptor.start()
+   *
+   *   但是在trunk版本中，acceptor专门提供了一个startProcessors方法来启动processor，
+   *   触发还是在socketServer.startup里面触发的，启动顺序还是先启动processor，再启动acceptor.
+   * }
+   * */
   this.synchronized {
     processors.foreach { processor =>
       Utils.newThread(s"kafka-network-thread-$brokerId-${endPoint.listenerName}-${endPoint.securityProtocol}-${processor.id}",
