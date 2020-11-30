@@ -121,6 +121,9 @@ class SocketServer(val config: KafkaConfig,
    *
    * @param startProcessingRequests Flag indicating whether `Processor`s must be started.
    */
+    /**
+     * 看起来startProcessingRequests的作用是为了延迟启动processor和acceptor，0.11.0版本没有这个逻辑
+     * */
   def startup(startProcessingRequests: Boolean = true): Unit = {
     this.synchronized {
       /**
@@ -204,6 +207,9 @@ class SocketServer(val config: KafkaConfig,
   def startProcessingRequests(authorizerFutures: Map[Endpoint, CompletableFuture[Void]] = Map.empty): Unit = {
     info("Starting socket server acceptors and processors")
     this.synchronized {
+      /**
+       * startedProcessingRequests用来标记是否已近启动了processor，防止重复两次启动processor
+       * */
       if (!startedProcessingRequests) {
         startControlPlaneProcessorAndAcceptor(authorizerFutures)
         startDataPlaneProcessorsAndAcceptors(authorizerFutures)
@@ -246,12 +252,29 @@ class SocketServer(val config: KafkaConfig,
    * We start inter-broker listener before other listeners. This allows authorization metadata for
    * other listeners to be stored in Kafka topics in this cluster.
    */
+
+    /**
+     * 这里分了控制流和数据流，数据流又包括内部和外部(业务客户端)。
+     * 这里会启动内部和外部的所有acceptor和其对应的processor。
+     * */
   private def startDataPlaneProcessorsAndAcceptors(authorizerFutures: Map[Endpoint, CompletableFuture[Void]]): Unit = {
+    /**
+     * interBrokerListener是内部的lister。
+     * */
     val interBrokerListener = dataPlaneAcceptors.asScala.keySet
       .find(_.listenerName == config.interBrokerListenerName)
       .getOrElse(throw new IllegalStateException(s"Inter-broker listener ${config.interBrokerListenerName} not found, endpoints=${dataPlaneAcceptors.keySet}"))
+
+    /**
+     * 这里从dataPlaneAcceptors中分离出内部的acceptor，然后加在前面，目的是为了先启动内部的acceptor，在启动外部用的acceptor.
+     * 所以orderedAcceptors带了order前缀，意思是按照 内部acceptor放前面，其他放后面的规则来的。
+     * */
     val orderedAcceptors = List(dataPlaneAcceptors.get(interBrokerListener)) ++
       dataPlaneAcceptors.asScala.filter { case (k, _) => k != interBrokerListener }.values
+
+    /**
+     * 然后这里就开始启动acceptor和对应的processor了，当然里面会先启动processor，再启动acceptor。
+     * */
     orderedAcceptors.foreach { acceptor =>
       val endpoint = acceptor.endPoint
       startAcceptorAndProcessors(DataPlaneThreadPrefix, endpoint, acceptor, authorizerFutures)
@@ -261,6 +284,9 @@ class SocketServer(val config: KafkaConfig,
   /**
    * Start the processor of control-plane acceptor and the acceptor of this server.
    */
+    /**
+     * ControlPlaneThreadPrefix用来作为processor和acceptor线程名的前缀.
+     * */
   private def startControlPlaneProcessorAndAcceptor(authorizerFutures: Map[Endpoint, CompletableFuture[Void]]): Unit = {
     controlPlaneAcceptorOpt.foreach { controlPlaneAcceptor =>
       val endpoint = config.controlPlaneListener.get
