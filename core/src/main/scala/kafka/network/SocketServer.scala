@@ -138,8 +138,15 @@ class SocketServer(val config: KafkaConfig,
        * 一个EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol)
        * 对应一个acceptor，一个acceptor只对应一个processor，注意到，这里的processor个数只有一个，和外部listener通道是不同的。
        * */
+      /**
+       * 这里把数据流和控制流进行了分离
+       * */
       createControlPlaneAcceptorAndProcessor(config.controlPlaneListener)
       createDataPlaneAcceptorsAndProcessors(config.numNetworkThreads, config.dataPlaneListeners)
+
+      /**
+       * 按照数据流和控制流来分别启动processor.
+       * */
       if (startProcessingRequests) {
         this.startProcessingRequests()
       }
