@@ -110,6 +110,9 @@ class SocketServer(val config: KafkaConfig,
   private var stoppedProcessingRequests = false
 
   /**
+   * 看起来startProcessingRequests的作用是为了延迟启动processor和acceptor，0.11.0版本没有这个逻辑
+   * */
+  /**
    * Starts the socket server and creates all the Acceptors and the Processors. The Acceptors
    * start listening at this stage so that the bound port is known when this method completes
    * even when ephemeral ports are used. Acceptors and Processors are started if `startProcessingRequests`
@@ -121,9 +124,6 @@ class SocketServer(val config: KafkaConfig,
    *
    * @param startProcessingRequests Flag indicating whether `Processor`s must be started.
    */
-    /**
-     * 看起来startProcessingRequests的作用是为了延迟启动processor和acceptor，0.11.0版本没有这个逻辑
-     * */
   def startup(startProcessingRequests: Boolean = true): Unit = {
     this.synchronized {
       /**
@@ -309,6 +309,9 @@ class SocketServer(val config: KafkaConfig,
 
   private def createControlPlaneAcceptorAndProcessor(endpointOpt: Option[EndPoint]): Unit = {
     endpointOpt.foreach { endpoint =>
+      /**
+       * 首先将添加的listenerName加入到quota中
+       * */
       connectionQuotas.addListener(config, endpoint.listenerName)
       val controlPlaneAcceptor = createAcceptor(endpoint, ControlPlaneMetricPrefix)
       val controlPlaneProcessor = newProcessor(nextProcessorId, controlPlaneRequestChannelOpt.get,
@@ -1432,15 +1435,34 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
     updateConnectionRateQuota(maxConnectionRate)
   }
 
+  /**
+   * removeListener的时候，唤醒acceptor我理解，但是addListener的时候，唤醒，就有点不太理解了。
+   * */
   private[network] def addListener(config: KafkaConfig, listenerName: ListenerName): Unit = {
     counts.synchronized {
+      /**
+       * 对于新的listerName，需要配置它对应的最大连接数.以及listernName维度的链接计数.
+       * 也就是往maxConnectionsPerListener和listenerCounts放入对应的变量
+       * */
       if (!maxConnectionsPerListener.contains(listenerName)) {
         val newListenerQuota = new ListenerConnectionQuota(counts, listenerName)
         maxConnectionsPerListener.put(listenerName, newListenerQuota)
+
         listenerCounts.put(listenerName, 0)
+
         config.addReconfigurable(newListenerQuota)
         newListenerQuota.configure(config.valuesWithPrefixOverride(listenerName.configPrefix))
       }
+
+      /**
+       * 最后再唤醒下所有等待connection slot配额的acceptor。
+       * 其实我理解这里没必要调这个唤醒函数的，因为如果一个acceptor在等待配额，那么有3种情况：
+       * ①该listerName(也就是ip+port)的quota超了；②ip的quota超了；③broker的总quota超了.
+       * 那么除非增加一个listenerName可以增加ip或者broker维度的quota，否则这里唤醒是没有必要的.
+       * 感觉这里唤醒一次 确实没必要，因为上面三个维度的quota都是配置的，而且这里还没启动其对应的acceptor，
+       * 该listerName对应的acceptor不可能wait,唤醒别人的acceptor也没意义.
+       * 但概率上讲别人不该没考虑到，肯定有我没想到的地方。
+       * */
       counts.notifyAll()
     }
   }
