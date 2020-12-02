@@ -307,19 +307,41 @@ class SocketServer(val config: KafkaConfig,
     }
   }
 
+  /**
+   * 这里发现，每个控制流listerName只对应一个acceptor和一个processor.
+   * 为啥不能支持可以配置多多processor呢  和数据流一样。
+   * */
   private def createControlPlaneAcceptorAndProcessor(endpointOpt: Option[EndPoint]): Unit = {
     endpointOpt.foreach { endpoint =>
       /**
        * 首先将添加的listenerName加入到quota中
        * */
       connectionQuotas.addListener(config, endpoint.listenerName)
+      /**
+       * 创建controller的acceptor
+       * */
       val controlPlaneAcceptor = createAcceptor(endpoint, ControlPlaneMetricPrefix)
+      /**
+       * 创建对应的processor
+       * */
       val controlPlaneProcessor = newProcessor(nextProcessorId, controlPlaneRequestChannelOpt.get,
         connectionQuotas, endpoint.listenerName, endpoint.securityProtocol, memoryPool, isPrivilegedListener = true)
+
+      /**
+       * 将acceptor和processor都包到Some里
+       * */
       controlPlaneAcceptorOpt = Some(controlPlaneAcceptor)
       controlPlaneProcessorOpt = Some(controlPlaneProcessor)
+
+      /**
+       * 为了方便传入addProcessors，将controller控制流的processor放入一个ArrayBuffer中；
+       * */
       val listenerProcessors = new ArrayBuffer[Processor]()
       listenerProcessors += controlPlaneProcessor
+
+      /**
+       *  首先将该processor放入requestChannel中；然后放入acceptor中
+       * */
       controlPlaneRequestChannelOpt.foreach(_.addProcessor(controlPlaneProcessor))
       nextProcessorId += 1
       controlPlaneAcceptor.addProcessors(listenerProcessors, ControlPlaneThreadPrefix)
