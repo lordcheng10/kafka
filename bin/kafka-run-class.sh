@@ -228,6 +228,10 @@ else
 fi
 
 # Memory options
+#这里-z "$KAFKA_HEAP_OPTS"表示KAFKA_HEAP_OPTS变量值转换为字符串后，长度是否为0。
+#如果之前没定义过，那么肯定为0，然后就会重新定义，这里就不再是通过export定义到环境变量了，
+#因为这个脚本就是最后调用的脚本了，这个脚本里面不会再调用其他脚本，因此就可以不用通过export的方式传递变量定义了。
+#换言之，如果是脚本内部自己用的，那么按照变量定义就好，如果是其他脚本使用的，那么可以通过export定义成环境变量的方式来传递
 if [ -z "$KAFKA_HEAP_OPTS" ]; then
   KAFKA_HEAP_OPTS="-Xmx256M"
 fi

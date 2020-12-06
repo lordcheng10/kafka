@@ -25,6 +25,10 @@ if [ "x$KAFKA_LOG4J_OPTS" = "x" ]; then
     export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:$base_dir/../config/log4j.properties"
 fi
 
+#在shell语法中，如果之前没有定义过变量，也可以使用，只是没值罢了，比如这里：
+#KAFKA_HEAP_OPTS在此之前没有被定义过，因此这里"x$KAFKA_HEAP_OPTS"打印出来的话，实际就是字符串"x"
+#用这样的方式，来区别在此之前是否有定义过该变量，不管是以环境变量的方式还是就是简单变量的方式定义。
+#如果定义过，那么这里就不覆盖了. 通过export 可以将该变量放到环境变量中，后面任何脚本都可以获取该该变量值了。
 if [ "x$KAFKA_HEAP_OPTS" = "x" ]; then
     export KAFKA_HEAP_OPTS="-Xmx1G -Xms1G"
 fi
