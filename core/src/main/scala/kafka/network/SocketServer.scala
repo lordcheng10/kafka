@@ -300,6 +300,9 @@ class SocketServer(val config: KafkaConfig,
                                                     endpoints: Seq[EndPoint]): Unit = {
     endpoints.foreach { endpoint =>
       connectionQuotas.addListener(config, endpoint.listenerName)
+      /**
+       * 创建acceptor
+       * */
       val dataPlaneAcceptor = createAcceptor(endpoint, DataPlaneMetricPrefix)
       addDataPlaneProcessors(dataPlaneAcceptor, endpoint, dataProcessorsPerListener)
       dataPlaneAcceptors.put(endpoint, dataPlaneAcceptor)
@@ -310,6 +313,10 @@ class SocketServer(val config: KafkaConfig,
   /**
    * 这里发现，每个控制流listerName只对应一个acceptor和一个processor.
    * 为啥不能支持可以配置多多processor呢  和数据流一样。
+   *
+   * 可能想的是一类控制流可以配置一个端口，这样就可以有多个processor处理了,
+   * 一类控制流的事情不会太多，所以是一个processor。
+   * TODO-疑惑：但是 一个类控制流 支持配置多个processor线程岂不是更好。
    * */
   private def createControlPlaneAcceptorAndProcessor(endpointOpt: Option[EndPoint]): Unit = {
     endpointOpt.foreach { endpoint =>
@@ -1472,7 +1479,16 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
 
         listenerCounts.put(listenerName, 0)
 
+        /**
+         * 将该listerName的quota加入可以配置的集合中，方便后面可以动态更新quota配置.
+         * */
         config.addReconfigurable(newListenerQuota)
+        /**
+         * 先过滤出以listenerName.configPrefix为前缀的配置，来作为我们newListenerQuota的配置
+         * 其实这里就只是从我们配置文件配置的broker维度最大链接数（max.connections）拿出来更新到listerName中，然后
+         * 更新下链接速率quota:最大连接速率；
+         * 我发现 kafka的quota设计 全都是用metric体系来做的，我应该去理解下kafka 的metric体系,然后再来研究这里：是如何做的连接速率quota功能的.
+         * */
         newListenerQuota.configure(config.valuesWithPrefixOverride(listenerName.configPrefix))
       }
 
@@ -1579,6 +1595,11 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
    * connection资源(slot)不可获取有两种情况：
    * ①该listenerName使用的连接数>= 该listenerName对应的连接数阀值；
    * ②总的连接数超过了最大连接数阀值，且不是受保护的listenerName(内部listenerName)
+   *
+   * 也就是说，即使是受保护的listerName(内部listerName)，
+   * 一旦该listerName的连接数大于了该listerName的最大连接数，依然是会被限制的,
+   * 当然这取决于你是否配置了该listerName的最大连接数，如果你不希望内部的listerName被限制，
+   * 那么你就不设置该listerName的最大连接数，这个配置似乎的写到zk上的，类似topic的数据保留时间配置。
    * */
   private def connectionSlotAvailable(listenerName: ListenerName): Boolean = {
     if (listenerCounts(listenerName) >= maxListenerConnections(listenerName))
@@ -1745,6 +1766,9 @@ class ConnectionQuotas(config: KafkaConfig, time: Time, metrics: Metrics) extend
       Option(configs.get(KafkaConfig.MaxConnectionsProp)).map(_.toString.toInt).getOrElse(Int.MaxValue)
     }
 
+    /**
+     * 最大链接速率
+     * */
     private def maxConnectionCreationRate(configs: util.Map[String, _]): Int = {
       Option(configs.get(KafkaConfig.MaxConnectionCreationRateProp)).map(_.toString.toInt).getOrElse(Int.MaxValue)
     }

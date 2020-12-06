@@ -256,6 +256,10 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
     addBrokerReconfigurable(kafkaServer.socketServer)
   }
 
+  /**
+   * ①检查下添加的可动态修改的配置项里面是否包含不可动态修改的配置项(我理解就是检查动态修改的配置项里是否包含我们配置文件写死的配置项)
+   * ②将可以动态修改的配置项，加入到reconfigurables集合中，整体进行管理
+   * */
   def addReconfigurable(reconfigurable: Reconfigurable): Unit = CoreUtils.inWriteLock(lock) {
     verifyReconfigurableConfigs(reconfigurable.reconfigurableConfigs.asScala)
     reconfigurables += reconfigurable
@@ -270,6 +274,9 @@ class DynamicBrokerConfig(private val kafkaConfig: KafkaConfig) extends Logging 
     reconfigurables -= reconfigurable
   }
 
+  /**
+   * 动态配置里面不能包含非动态配置项，如果包含这里就会异常报错
+   * */
   private def verifyReconfigurableConfigs(configNames: Set[String]): Unit = CoreUtils.inWriteLock(lock) {
     val nonDynamic = configNames.filter(DynamicConfig.Broker.nonDynamicProps.contains)
     require(nonDynamic.isEmpty, s"Reconfigurable contains non-dynamic configs $nonDynamic")
