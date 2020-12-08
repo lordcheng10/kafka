@@ -81,7 +81,7 @@ class ControllerChannelManager(controllerContext: ControllerContext,
   )
 
   /**
-   *  这里感觉有bug
+   *  这里感觉有bug,这里为啥要shutdown的broker也执行addNewBroker呢
    * */
   def startup() = {
     controllerContext.liveOrShuttingDownBrokers.foreach(addNewBroker)
@@ -127,9 +127,21 @@ class ControllerChannelManager(controllerContext: ControllerContext,
   }
 
   private def addNewBroker(broker: Broker): Unit = {
+    /**
+     * 首先创建一个message queue，这个queue是用来controller和broker之间异步发送请求的.
+     * */
     val messageQueue = new LinkedBlockingQueue[QueueItem]
     debug(s"Controller ${config.brokerId} trying to connect to broker ${broker.id}")
+    /**
+     * 如果配置了control.plane.listener.name ，就从中获取，否则就从inter.broker.listener.name获取。
+     *
+     * 有个问题 ：control.plane.listener.name和inter.broker.listener.name的区别是啥，为啥要分开配置
+     * */
     val controllerToBrokerListenerName = config.controlPlaneListenerName.getOrElse(config.interBrokerListenerName)
+    /**
+     * controller和broker之间的安全协议,如果配置了control.plane.listener.name，就从其中获取，
+     * 否则从security.inter.broker.protocol配置中获取的
+     * */
     val controllerToBrokerSecurityProtocol = config.controlPlaneSecurityProtocol.getOrElse(config.interBrokerSecurityProtocol)
     val brokerNode = broker.node(controllerToBrokerListenerName)
     val logContext = new LogContext(s"[Controller id=${config.brokerId}, targetBrokerId=${brokerNode.idString}] ")
