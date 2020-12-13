@@ -113,6 +113,13 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   }
 
+  /**
+   * trunk版本中，这个方法在BrokerChange变化事件里面被调用了两次，但是在0.11.0版本里面，只被调用了一次。
+   * 因为在trunk版本里面，broker的epoch版本号变化的也要调用这个方法，而不只是新增的。
+   *
+   * 那broker版本号变化的broker，什么情况下出现呢？不管什么情况下出现，只要变化了，
+   * 就该重新构建下链接，先删除，再重新add进来，也就是重新关闭后再建立链接，也就是先removeBroker再addBroker
+   * */
   def addBroker(broker: Broker) {
     // be careful here. Maybe the startup() API has already started the request send thread
     brokerLock synchronized {
@@ -129,11 +136,37 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   }
 
+  /**
+   * 这里也是这样的思路，把和broker通信要用的东西构建好后，
+   * 放到ControllerBrokerStateInfo对象，并放入brokerStateInfo中.
+   * 和trunk版本一样的思路.
+   * */
   private def addNewBroker(broker: Broker) {
+    /**
+     * trunk版本也是这么定义messageQueue的。
+     * */
     val messageQueue = new LinkedBlockingQueue[QueueItem]
     debug("Controller %d trying to connect to broker %d".format(config.brokerId, broker.id))
+    /**
+     * 因为0.11.0版本没有从内部listerName中区分cotnroller和broker通信、broker与broker通信的listerName，所以这里没和trunk那样麻烦，
+     * 直接用了配置的内部listerName来构建node.
+     *
+     * trunk版本多了controllerToBrokerSecurityProtocol和controllerToBrokerListenerName的构建
+     * */
     val brokerNode = broker.getNode(config.interBrokerListenerName)
+
+    /**
+     * trunk版本多了LogContext对象构建，LogContext相当于一个logger工厂，
+     * 从这个工厂里构建的logger，打的日志有相同前缀，
+     * 这个前缀是我们在构架LogContext对象的时候指定的。
+     *
+     *
+     * 另外还多了一个reconfigurableChannelBuilder，这个实际就是channelBuilder，只不过是支持动态修改配置的channelBuilder。
+     * */
     val networkClient = {
+      /**
+       * trunk版本 在这里就多了对channelBuilder进行动态配置的操作
+       * */
       val channelBuilder = ChannelBuilders.clientChannelBuilder(
         config.interBrokerSecurityProtocol,
         JaasContext.Type.SERVER,
@@ -167,15 +200,50 @@ class ControllerChannelManager(controllerContext: ControllerContext,
         new ApiVersions
       )
     }
+
+    /**
+     * 这里的字符串格式化，trunk版本也改了，不再用format了，而是用：
+     * case None => s"Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
+     * case Some(name) => s"$name:Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
+     *
+     * 内容倒没变。这个前缀threadNamePrefix是传进来的。
+     * threadNamePrefix前缀是传进来的，应该是留的一个口，但实际没有用到，追踪了下，传入的全部是None，也不支持配置
+     * */
     val threadName = threadNamePrefix match {
       case None => "Controller-%d-to-broker-%d-send-thread".format(config.brokerId, broker.id)
       case Some(name) => "%s:Controller-%d-to-broker-%d-send-thread".format(name, config.brokerId, broker.id)
     }
 
+    /**
+     * trunk这里还增加了一个requestRateAndQueueTimeMetrics的metric来统计请求发送e率以及请求的队列挤压耗时统计
+     *
+     *  构建controller和broker通信用的发送线程;
+     *  setDaemon(true):表示设置为守护线程，进程退出不用等这个线程；
+     *  setDaemon(false):表示设置为非守护线程，进程退出必须要等这个线程；
+     *
+     *  RequestSendThread的传入参数也有变化，trunk版本多传入了requestRateAndQueueTimeMetrics和stateChangeLogger，
+     *  stateChangeLogger是一个状态变化日志类，打日志用的。0.11版本没传进来，那RequestSendThread这类怎么打日志呢？
+     *  RequestSendThread继承了ShutdownableThread类，ShutdownableThread继承了Logging接口，自身可以打日志。
+     *  只不过trunk版本认为里面涉及到一些应该打到状态日志里的，所以才传入了状态日志类：
+     * stateChangeLogger.withControllerEpoch(controllerContext.epoch).trace(s"Received response "
+     * s"${response.toString(requestHeader.apiVersion)} for request $api with correlation id " +
+     * s"${requestHeader.correlationId} sent to broker $brokerNode")
+     *
+     * 其实也就是把每次发送请求给broker收到responose这个过程信息打出来。
+     *
+     * */
     val requestThread = new RequestSendThread(config.brokerId, controllerContext, messageQueue, networkClient,
       brokerNode, config, time, threadName)
     requestThread.setDaemon(false)
 
+    /**
+     * trunk这个队列统计的metric也有变化。
+     * newGauge的第二个参数，应该是函数接口类吧 ？在trunk版本中直接传入了一个函数，方法要求的参数类型都是 metric: Gauge[T]
+     * 另外第三个参数，传入的变量名也改了：brokerMetricTags，实际是一样的，就只改了名。
+     *
+     * trunk这里传入函数方法，看起来是新版本scala的一个新特性。换个scala低版本就会报错.
+     * 似乎高版本scala可以匹配到Gauge中适合的方法value()
+     * */
     val queueSizeGauge = newGauge(
       QueueSizeMetricName,
       new Gauge[Int] {
@@ -184,6 +252,10 @@ class ControllerChannelManager(controllerContext: ControllerContext,
       queueSizeTags(broker.id)
     )
 
+    /**
+     *
+     *
+     * */
     brokerStateInfo.put(broker.id, new ControllerBrokerStateInfo(networkClient, brokerNode, messageQueue,
       requestThread, queueSizeGauge))
   }
