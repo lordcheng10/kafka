@@ -81,7 +81,9 @@ class ControllerChannelManager(controllerContext: ControllerContext,
   )
 
   /**
-   *  这里感觉有bug,这里为啥要shutdown的broker也执行addNewBroker呢
+   *  这里感觉有bug,这里为啥要shutdown的broker也执行addNewBroker呢？
+   *
+   *  没有bug，只是在调用方法的时候，注意下，别多个线程同时调用addBroker和startup方法。
    * */
   def startup() = {
     controllerContext.liveOrShuttingDownBrokers.foreach(addNewBroker)
@@ -110,7 +112,26 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   }
 
+  /**
+   * 这个方法在BrokerChange变化事件里面被调用了两次，但是在0.11.0版本里面，只被调用了一次。
+   * 因为在trunk版本里面，broker的epoch版本号变化的也要调用这个方法，而不只是新增的。
+   *
+   * 那broker版本号变化的broker，什么情况下出现呢？应该就是那种瞬间停启那种broker把，此时虽然它没在新增的里面，但是也应该重新添加下通信结构：先移除，再添加。
+   * 之前0.11.0版本，只管新增的（也就是从zk拿到全量list然后减去内存维护的），但有些瞬间变动的broker，可能在两个列表里都有，对于这种broker
+   * ，应该移除后，重新建立下链接。也就是先removeBroker再addBroker
+   * */
   def addBroker(broker: Broker): Unit = {
+    /**
+     * 这里它叫我们小心，说startup（）方法中可能已经启动了send发送线程了。
+     * 所以这里才进行了判断，要不包含该broker.id的时候，才启动？ 还是说，即使判断了，也可能存在多启动的情况？
+     *
+     * startup()也在调用addNewBroker，这两个同时加，有没可能，没有可能。因为startup()是在conroller选举成为leader的时候，初始化
+     * 调用的，虽然是先注册了broker变化的监听器，再调用startUp方法，但是controller有一个事件管理类ControllerEventManager,所有的事件都是放到该类的一个队列中，
+     * 然后下游有一个单线程取出事件进行处理，所以，即便是先注册监听器，即便此时刚好有broker变动触发回调，也会按照顺序来处理，先处理Startup事件完成（此时就会把startUp调用走完），
+     * 再处理后面的事件，这样肯定不会出现同时处理多个事件，也就是同时调用Startup和addBroker方法。
+     *
+     * 另外为什么，这里作者会让我们小心，重复启动发送线程，并不是说现在存在这个问题，而是提醒我们，别两个线程同时调用startUp和addBroker方法，这样会出现这个问题。
+     * */
     // be careful here. Maybe the startup() API has already started the request send thread
     brokerLock synchronized {
       if (!brokerStateInfo.contains(broker.id)) {
@@ -135,7 +156,10 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     /**
      * 如果配置了control.plane.listener.name ，就从中获取，否则就从inter.broker.listener.name获取。
      *
-     * 有个问题 ：control.plane.listener.name和inter.broker.listener.name的区别是啥，为啥要分开配置
+     * 有个问题 ：control.plane.listener.name和inter.broker.listener.name的区别是啥，为啥要分开配置?
+     *
+     * listerName我们分为：内部和外部listerName两类,而内部listerName又分为了数据和控制流两类。
+     * 所以如果配置了控制流listerName，那么意思是内部listerName我们又分了控制流和数据流，内部的数据流还是走内部listerName。
      * */
     val controllerToBrokerListenerName = config.controlPlaneListenerName.getOrElse(config.interBrokerListenerName)
     /**
@@ -143,9 +167,21 @@ class ControllerChannelManager(controllerContext: ControllerContext,
      * 否则从security.inter.broker.protocol配置中获取的
      * */
     val controllerToBrokerSecurityProtocol = config.controlPlaneSecurityProtocol.getOrElse(config.interBrokerSecurityProtocol)
+    /**
+     * 根据controller和broker之间的listerName，从建立连接时候，构建的listerName和endpoint的映射map，来构建对应的brokerNode
+     * */
     val brokerNode = broker.node(controllerToBrokerListenerName)
+    /**
+     * 这个玩意，似乎是用来加一些公共内容的，但具体这玩意是什么作用呢
+     *
+     * 我理解是添加一些公共的日志内容，然后后面我们通过这个来创建logger，打的日志都会有这个公共内容
+     * */
     val logContext = new LogContext(s"[Controller id=${config.brokerId}, targetBrokerId=${brokerNode.idString}] ")
+
     val (networkClient, reconfigurableChannelBuilder) = {
+      /**
+       * 构建一个builder
+       * */
       val channelBuilder = ChannelBuilders.clientChannelBuilder(
         controllerToBrokerSecurityProtocol,
         JaasContext.Type.SERVER,
@@ -156,12 +192,32 @@ class ControllerChannelManager(controllerContext: ControllerContext,
         config.saslInterBrokerHandshakeRequestEnable,
         logContext
       )
+      /**
+       * 上面是channel，怎么和config匹配上了，啥玩意
+       * ChannelBuilder是继承自Configurable的。
+       * 所以上面是有可能创建Reconfigurable的
+       *
+       * 有点不太明白为啥Reconfigurable、Configurable、ChannelBuilder三个之间有啥关系
+       * 配置和channelBuilder为啥要设计在一起?
+       *
+       * Reconfigurable是一个动态更新配置的接口，继承它，可以提供动态更新配置的功能。
+       * Reconfigurable又是属于配置这一类的，所以Reconfigurable又继承了Configurable，从而这三个就串起来了：
+       * ChannelBuilder类有一些配置信息，这些信息我们希望可以动态配置，所以继承了Reconfigurable。
+       * 类似的，还有JmxReporter等继承了该类，从而可以支持动态配置。
+       *
+       *
+       * 这里主要是加到动态配置里,方便后面可以动态修改channel的配置
+       * */
       val reconfigurableChannelBuilder = channelBuilder match {
         case reconfigurable: Reconfigurable =>
           config.addReconfigurable(reconfigurable)
           Some(reconfigurable)
         case _ => None
       }
+
+      /**
+       * 构建和broker之间通信用的selector
+       * */
       val selector = new Selector(
         NetworkReceive.UNLIMITED,
         Selector.NO_IDLE_TIMEOUT_MS,
@@ -173,6 +229,11 @@ class ControllerChannelManager(controllerContext: ControllerContext,
         channelBuilder,
         logContext
       )
+
+      /**
+       * 利用上面构建的selector来构建networkClient，
+       * controller主要就是通过networkClient来和broker之间通信的
+       * */
       val networkClient = new NetworkClient(
         selector,
         new ManualMetadataUpdater(Seq(brokerNode).asJava),
@@ -191,23 +252,64 @@ class ControllerChannelManager(controllerContext: ControllerContext,
         new ApiVersions,
         logContext
       )
+
       (networkClient, reconfigurableChannelBuilder)
     }
+
+   /**
+    * controller和brokerId之间的线程名
+    * threadNamePrefix前缀是传进来的，应该是留的一个口，但实际没有用到，追踪了下，传入的全部是None，也不支持配置
+    * */
     val threadName = threadNamePrefix match {
       case None => s"Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
       case Some(name) => s"$name:Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
     }
 
+    /**
+     * 这个metric在统计啥玩意.
+     * requestRateAndQueueTimeMetrics.update(time.milliseconds() - enqueueTimeMs,
+     * TimeUnit.MILLISECONDS)从这里看，似乎是统计的队列挤压时间.
+     * 用当前时间-入队时间.
+     * 但从requestRateAndQueueTimeMetrics命名，可以看出，似乎Timer这个metric在统计排队耗时的时候，
+     * 也可以统计controller发送的请求速率，这个是真的开始发送的速率，而不是之前放入broker消息队列的速率.
+     * */
     val requestRateAndQueueTimeMetrics = newTimer(
       RequestRateAndQueueTimeMetricName, TimeUnit.MILLISECONDS, TimeUnit.SECONDS, brokerMetricTags(broker.id)
     )
 
+    /**
+     * 构建controller和broker通信用的发送线程;
+     * setDaemon(true):表示设置为守护线程，进程退出不用等这个线程；
+     * setDaemon(false):表示设置为非守护线程，进程退出必须要等这个线程；
+     * */
     val requestThread = new RequestSendThread(config.brokerId, controllerContext, messageQueue, networkClient,
       brokerNode, config, time, requestRateAndQueueTimeMetrics, stateChangeLogger, threadName)
     requestThread.setDaemon(false)
 
+    /**
+     * trunk这个队列统计的metric也有变化。
+     * newGauge的第二个参数，应该是函数接口类吧 ？在trunk版本中直接传入了一个函数，方法要求的参数类型都是 metric: Gauge[T]
+     * 另外第三个参数，传入的变量名也改了：brokerMetricTags，实际是一样的，就只改了名。
+     *
+     * 这里传入函数方法，看起来是新版本scala的一个新特性。换个scala低版本就会报错。
+     * 似乎高版本，当函数参数是类时，这个时候如果传入方法，它会自动匹配类中合适的方法。
+     * 这个类必须是抽象类，或接口,然后这个参数类，必须包含一个抽象方法或接口方法，而且只能有一个。
+     *
+     *
+     * 其实这里用到了java8 的新特性：函数式接口，只不过规范的函数式接口需要带@FunctionalInterface 修饰，这里Gauge没有带，而且是抽象类,
+     * 如果在java函数式编程中，不能是抽象类，只能是接口，似乎高版本的scala可以解决这个问题，可以是抽象类，
+     * 但里面的抽象方法和接口类一样，只能有一个，否则无法匹配上。
+     *
+     * 也就是高版本的scala，可以对抽象类也匹配上。
+     * */
     val queueSizeGauge = newGauge(QueueSizeMetricName, () => messageQueue.size, brokerMetricTags(broker.id))
 
+    /**
+     * 这个是统计controller到每个broker的状态信息，包括：metric监控、网络客户端、node节点等，
+     * 也就是说controller到这个节点通信相关的都放到这个map中了.
+     *
+     * 也就是说这个方法把和broker通信要用的一些东西构建好后，封装到ControllerBrokerStateInfo中，并全部放到了brokerStateInfo中。
+     * */
     brokerStateInfo.put(broker.id, ControllerBrokerStateInfo(networkClient, brokerNode, messageQueue,
       requestThread, queueSizeGauge, requestRateAndQueueTimeMetrics, reconfigurableChannelBuilder))
   }

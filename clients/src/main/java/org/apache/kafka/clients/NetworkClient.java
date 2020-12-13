@@ -1189,7 +1189,7 @@ public class NetworkClient implements KafkaClient {
                 this.requestVersion = requestVersion;
                 this.isPartialUpdate = isPartialUpdate;
             }
-        };
+        };//TODO-chenlin-patch:这里不应该加;
 
     }
 

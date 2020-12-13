@@ -1618,10 +1618,25 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
       Set.empty[String]
   }
 
+  /**
+   *后去内部broker的listerName
+   * */
   def interBrokerListenerName = getInterBrokerListenerNameAndSecurityProtocol._1
+  /**
+   * 获取内部broker的安全协议
+   * */
   def interBrokerSecurityProtocol = getInterBrokerListenerNameAndSecurityProtocol._2
+  /**
+   * 获取controller控制流的listerName
+   * */
   def controlPlaneListenerName = getControlPlaneListenerNameAndSecurityProtocol.map { case (listenerName, _) => listenerName }
+  /**
+   * 获取controller控制流的安全协议
+   * */
   def controlPlaneSecurityProtocol = getControlPlaneListenerNameAndSecurityProtocol.map { case (_, securityProtocol) => securityProtocol }
+  /**
+   *
+   * */
   def saslMechanismInterBrokerProtocol = getString(KafkaConfig.SaslMechanismInterBrokerProtocolProp)
   val saslInterBrokerHandshakeRequestEnable = interBrokerProtocolVersion >= KAFKA_0_10_0_IV1
 
@@ -1712,6 +1727,8 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
 
   /**
    * 从listeners中过滤出，没在control.plane.listener.name中的listerName，那么就是数据listener。
+   * 这里包含了外部所有请求以及内部数据流。唯一排除了内部控制流（如果配置的了的话，eg：stopreplica请求、leaderAndIsr请求等）
+   * 如果没配置ControlPlaneListenerNameProp，那么这里就是全部的listerName，也就是说只会在后面区分内部和外部listerName，不区分内部中的控制流。
    * */
   def dataPlaneListeners: Seq[EndPoint] = {
     Option(getString(KafkaConfig.ControlPlaneListenerNameProp)) match {
@@ -1802,6 +1819,9 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
     }
   }
 
+  /**
+   * 根据配置的controller的listerName获取对应的安全协议.
+   * */
   private def getControlPlaneListenerNameAndSecurityProtocol: Option[(ListenerName, SecurityProtocol)] = {
     Option(getString(KafkaConfig.ControlPlaneListenerNameProp)) match {
       case Some(name) =>

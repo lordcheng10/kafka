@@ -143,6 +143,16 @@ class SocketServer(val config: KafkaConfig,
        * */
       /**
        * 这里把数据流和控制流进行了分离
+       *
+       * listerName分为：内部(又分为内部控制流(eg:更新metadata请求、leaderAndIsr、stopreplica等)和内部数据流(follower的fetch数据流))和外部.
+       * 这里把内部中的控制流提出来了(控制流，实际就是controller和broker之间通信流)，在createControlPlaneAcceptorAndProcessor方法里构建对应的acceptor和processor.
+       *
+       * 也就是说内部listerName分为：①controller和broker之间用的；②broker之间用的（eg：follower）；
+       * 另外就是外部listerName（外部客户端用的listerName）。
+       *
+       * listerName分为：①controller和broker之间用的；②broker和broker之间（或叫leader和follower之间）用的；③外部客户端和broker之间用的；
+       *
+       * 0.11.0只分了内部和外部两类；也就是说controller和broker之间的通信链路没有独立出来
        * */
       createControlPlaneAcceptorAndProcessor(config.controlPlaneListener)
       createDataPlaneAcceptorsAndProcessors(config.numNetworkThreads, config.dataPlaneListeners)
@@ -317,6 +327,8 @@ class SocketServer(val config: KafkaConfig,
    * 可能想的是一类控制流可以配置一个端口，这样就可以有多个processor处理了,
    * 一类控制流的事情不会太多，所以是一个processor。
    * TODO-疑惑：但是 一个类控制流 支持配置多个processor线程岂不是更好。
+   *
+   * 如果control.plane.listener.name没有配置的话，那么这里endpointOpt是None，也就是说 这个方法什么都不会做
    * */
   private def createControlPlaneAcceptorAndProcessor(endpointOpt: Option[EndPoint]): Unit = {
     endpointOpt.foreach { endpoint =>
