@@ -96,8 +96,20 @@ object CommandLineUtils extends Logging {
 
   /**
    * Print usage and exit
+   *
+   * parser.printHelpOn(System.err) 打印出帮助信息，怎么打印的？
+   * 另外，System.err又是啥? 是标准的错误输出流。
+   * parser.printHelpOn把一些要求的传入的参数信息，通过错误输出流打印出来。
    */
   def printUsageAndDie(parser: OptionParser, message: String): Nothing = {
+    /**
+     * 这三个输出的含义是啥？或者说区别。
+     * parser.printHelpOn(System.err) 是把我们要求的信息输出到标准错误输出流中。
+     * System.err.println(message) 控制台输出
+     * Exit.exit(1, Some(message))  这个是干啥，传入message干嘛？
+     * Exit是我们自定义的类，message没有用，1是退出码，最终会传入
+     * Runtime.getRuntime().halt(statusCode);
+     * */
     System.err.println(message)
     parser.printHelpOn(System.err)
     Exit.exit(1, Some(message))

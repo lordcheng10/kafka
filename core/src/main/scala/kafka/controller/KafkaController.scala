@@ -1617,10 +1617,23 @@ class KafkaController(val config: KafkaConfig,
   }
 
   private def processBrokerChange(): Unit = {
+    /**
+     * 如果不再是controller了，那么久直接返回，不处理事件。
+     * 是为了防止，不是controller了还在发请求给broker，或者在切换的过程中出现两个controller同时发送请求的情况。
+     * 其实除了controller宕机，触发的controller切换外，都有可能存在两个controller同时发送请求的情况，此时只能通过请求的epoch号来区分，
+     * broker通过判断epoch号来防止更新到旧的状态信息。
+     * */
     if (!isActive) return
     /**
      * 这里相对于0.11.0版本，除了获取brokerId外，还获取了对应的Epoch号.
      * 并且用KafkaZkClient替代了之前的ZkUtil类。
+     * 用epoch号，是为了区分出那些虽然不在new broker里面，但因为某些原因和zk短暂的断开过链接的节点，这些节点需要关闭链接后，重新走下add流程。
+     *
+     * 用KafkaZkClient替代之前的ZkUtil类是出于什么考虑？看起来似乎是为了使用异步zk客户端，高版本的zk支持异步方式。
+     *
+     * curBrokerAndEpochs： 集群中所有broker和epoch  map<Broker,Long>
+     * curBrokerIdAndEpochs：从curBrokerAndEpochs中过滤出brokerId和epoch，map<brokerId,epoch>
+     * curBrokerIds：所含有的brokerId
      * */
     val curBrokerAndEpochs = zkClient.getAllBrokerAndEpochsInCluster
     val curBrokerIdAndEpochs = curBrokerAndEpochs map { case (broker, epoch) => (broker.id, epoch) }
@@ -1639,7 +1652,6 @@ class KafkaController(val config: KafkaConfig,
      * */
     val bouncedBrokerIds = (curBrokerIds & liveOrShuttingDownBrokerIds)
       .filter(brokerId => curBrokerIdAndEpochs(brokerId) > controllerContext.liveBrokerIdAndEpochs(brokerId))
-
     /**
      * newBrokerAndEpochs：从curBrokerAndEpochs中选出，新增的Broker类以及epoch;
      * bouncedBrokerAndEpochs: 从curBrokerAndEpochs中选出，epoch变大的Broker类和epoch;
@@ -1660,6 +1672,9 @@ class KafkaController(val config: KafkaConfig,
       s"all live brokers: ${liveBrokerIdsSorted.mkString(",")}")
 
 
+    /**
+     * 这里开始处理各个类型的broker，上面都是在对broker排序
+     * */
     newBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
     /**
      * 对于epoch变化的broker，先移除，再添加channel.
@@ -1669,7 +1684,6 @@ class KafkaController(val config: KafkaConfig,
     bouncedBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
 
     deadBrokerIds.foreach(controllerChannelManager.removeBroker)
-
 
     /**
      *  对新增的broker进行版本兼容判断，对于兼容的broker，才进行注册，否则忽略。
@@ -1697,8 +1711,9 @@ class KafkaController(val config: KafkaConfig,
       onBrokerStartup(newBrokerIdsSorted)
     }
 
-
-
+    /**
+     * 
+     * */
     if (bouncedBrokerIds.nonEmpty) {
       controllerContext.removeLiveBrokers(bouncedBrokerIds)
       onBrokerFailure(bouncedBrokerIdsSorted)

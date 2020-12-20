@@ -46,9 +46,20 @@ import scala.collection._
 import scala.compat.java8.OptionConverters._
 import scala.concurrent.ExecutionException
 
+/**
+ * 专门关于topic的命令类,主要功能：
+ * ①创建topic；
+ * ②删除topic；
+ * ③扩tp；
+ * ④list集群的所有topic；
+ * ⑤打印某个topic的详细信息；
+ * */
 object TopicCommand extends Logging {
 
   def main(args: Array[String]): Unit = {
+    /**
+     * 参数解析和校验
+     * */
     val opts = new TopicCommandOptions(args)
     opts.checkArgs()
 
@@ -606,6 +617,10 @@ object TopicCommand extends Logging {
   }
 
   class TopicCommandOptions(args: Array[String]) extends CommandDefaultOptions(args) {
+    /**
+     * 解析传入的各个参数，然后统一放到options中。
+     * options存储了该命令可以接收的所有参数，或者说支持的所有参数，使用的时候，这些参数不一定都是必须全部给定的
+     * */
     private val bootstrapServerOpt = parser.accepts("bootstrap-server", "REQUIRED: The Kafka server to connect to. In case of providing this, a direct Zookeeper connection won't be required.")
       .withRequiredArg
       .describedAs("server to connect to")
@@ -684,14 +699,37 @@ object TopicCommand extends Logging {
     private val excludeInternalTopicOpt = parser.accepts("exclude-internal",
       "exclude internal topics when running list or describe command. The internal topics will be listed by default")
 
+    /**
+     * 把topic命令能够接收的所有参数全部解析后赋值给options。当然包括在抽象类CommandDefaultOptions中一开始就接收的helpOpt和versionOpt两个选项
+     * */
     options = parser.parse(args : _*)
+    /**
+     * 上面就把所有支持的参数，全部报错到options里了.
+     * 后面就从options去拿就行了。
+     * */
 
+
+    /**
+     * topic级别的操作参数
+     * */
     private val allTopicLevelOpts = immutable.Set[OptionSpec[_]](alterOpt, createOpt, describeOpt, listOpt, deleteOpt)
 
+    /**
+     * 副本级别状态显示的参数
+     * */
     private val allReplicationReportOpts: Set[OptionSpec[_]] = Set(reportUnderReplicatedPartitionsOpt, reportUnderMinIsrPartitionsOpt, reportAtMinIsrPartitionsOpt, reportUnavailablePartitionsOpt)
-
+    /**
+     * 判断options中是否有某个参数，或者说当前命令是否支持某个参数
+     * */
     def has(builder: OptionSpec[_]): Boolean = options.has(builder)
+
+    /**
+     * 将某个选项值转化为A类型的Option.
+     * */
     def valueAsOption[A](option: OptionSpec[A], defaultValue: Option[A] = None): Option[A] = if (has(option)) Some(options.valueOf(option)) else defaultValue
+    /**
+     * 将某个选项的值转化为A类型的list返回
+     * */
     def valuesAsOption[A](option: OptionSpec[A], defaultValue: Option[util.List[A]] = None): Option[util.List[A]] = if (has(option)) Some(options.valuesOf(option)) else defaultValue
 
     def hasCreateOption: Boolean = has(createOpt)
@@ -724,6 +762,9 @@ object TopicCommand extends Logging {
     def configsToDelete: Option[util.List[String]] = valuesAsOption(deleteConfigOpt)
 
     def checkArgs(): Unit = {
+      /**
+       * 检查参数个数
+       * */
       if (args.length == 0)
         CommandLineUtils.printUsageAndDie(parser, "Create, delete, describe, or change a topic.")
 

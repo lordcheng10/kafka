@@ -19,9 +19,26 @@ package kafka.utils
 
 import joptsimple.{OptionParser, OptionSet}
 
+/**
+ * args: 要解析的参数
+ * allowCommandOptionAbbreviation: 是否允许缩写，默认是不允许
+ * */
 abstract class CommandDefaultOptions(val args: Array[String], allowCommandOptionAbbreviation: Boolean = false) {
+  /**
+   * OptionParser是jopt-simple库的类。
+   * */
   val parser = new OptionParser(allowCommandOptionAbbreviation)
+  /**
+   * helpOpt和versionOpt是统一的，所有解析命令都有。所以先加入到parser中
+   * */
   val helpOpt = parser.accepts("help", "Print usage information.").forHelp()
   val versionOpt = parser.accepts("version", "Display Kafka version.").forHelp()
+
+  /**
+   * 后面会通过解析parser对options赋值。
+   * parser在此之前会接收所有的传入参数，当然最先接收的就是helpOpt和versionOpt。
+   *
+   * options表示当前命令可以接收的所有参数
+  * */
   var options: OptionSet = _
 }

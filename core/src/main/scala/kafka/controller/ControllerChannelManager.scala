@@ -64,7 +64,7 @@ class ControllerChannelManager(controllerContext: ControllerContext,
                                threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
   import ControllerChannelManager._
   /**
-   * 这里保存的是用于和每个broker通信的信息，比如：发送队列、发送线程等。key是brokerId.
+   * 这里保存的是用于和每个broker通信用的的一切信息，比如：发送队列、发送线程等。key是brokerId.
    * controller到每一个broker之间都有一个单独的队列和发送线程。
    * */
   protected val brokerStateInfo = new HashMap[Int, ControllerBrokerStateInfo]
@@ -88,6 +88,14 @@ class ControllerChannelManager(controllerContext: ControllerContext,
   def startup() = {
     controllerContext.liveOrShuttingDownBrokers.foreach(addNewBroker)
 
+    /**
+     * 有个问题，为啥上面哪个锁没包括进来，反倒是下面的线程启动要包括进来，brokerStateInfo的访问会有线程安全问题吗，
+     * 或者说会有同时两个线程去访问这个吗,我们的事件管理不是只有一个线程吗
+     *
+     * 这个brokerLock锁是12年写的，但我们事件管理逻辑是后面加的，所以我猜测，
+     * 是之前有多线程同时操作问题，后来就引入事件管理就没有了，
+     * 但是任然保留了这个锁.当时还没有上面哪行代码，上面哪行是19年加的。
+     * */
     brokerLock synchronized {
       brokerStateInfo.foreach(brokerState => startRequestSendThread(brokerState._1))
     }
@@ -135,7 +143,14 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     // be careful here. Maybe the startup() API has already started the request send thread
     brokerLock synchronized {
       if (!brokerStateInfo.contains(broker.id)) {
+        /**
+         * 有个问题：为什么在addNewBroker中，构建requestThread的时候 不启动requestThread，要单独在startRequestSendThread中去启动。
+         * */
         addNewBroker(broker)
+        /**
+         * 为啥要单独在这启动呢？直接在addNewBroker方法末尾启动不行吗？
+         * 感觉是为了逻辑更加清晰一点，所以拆开了，上面是添加，下面是启动方法。
+         * */
         startRequestSendThread(broker.id)
       }
     }

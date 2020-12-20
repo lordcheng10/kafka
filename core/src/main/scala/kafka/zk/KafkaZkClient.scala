@@ -50,6 +50,11 @@ import scala.collection.{Map, Seq, mutable}
  * easier to migrate away from `ZkUtils` (since removed). We should revisit this. We should also consider whether a
  * monolithic [[kafka.zk.ZkData]] is the way to go.
  */
+/**
+ *
+ * KafkaZkClient类是由KafkaControllerZkUtils类改出来的。
+ * 最开始设计KafkaControllerZkUtils，应该主要是想把controller的zk客户端改成异步的
+ * */
 class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boolean, time: Time) extends AutoCloseable with
   Logging with KafkaMetricsGroup {
 
@@ -423,13 +428,26 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
     * @return map of broker to epoch in the cluster.
     */
   def getAllBrokerAndEpochsInCluster: Map[Broker, Long] = {
+    /**
+     * 直接读取zk获得brokerId，然后再读取对应brokerId目录数据,构建broker,那么这里拿到的是活着的broker
+     * */
     val brokerIds = getSortedBrokerList
+    /**
+     * 构建request请求
+     * */
     val getDataRequests = brokerIds.map(brokerId => GetDataRequest(BrokerIdZNode.path(brokerId), ctx = Some(brokerId)))
+    /**
+     * 构建response
+     * */
     val getDataResponses = retryRequestsUntilConnected(getDataRequests)
     getDataResponses.flatMap { getDataResponse =>
       val brokerId = getDataResponse.ctx.get.asInstanceOf[Int]
       getDataResponse.resultCode match {
         case Code.OK =>
+          /**
+           * Some((a,b)) 也就是Some(Tuple2(a,b))类型通过toMap可以转换成Map[a,b]类型
+           * 但对应Tuple1 Tuple3 Tuple4....就不行了
+           * */
           Some((BrokerIdZNode.decode(brokerId, getDataResponse.data).broker, getDataResponse.stat.getCzxid))
         case Code.NONODE => None
         case _ => throw getDataResponse.resultException.get
@@ -1696,6 +1714,9 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
   }
 
   private def retryRequestsUntilConnected[Req <: AsyncRequest](requests: Seq[Req], expectedControllerZkVersion: Int): Seq[Req#Response] = {
+    /**
+     * 根据controller版本号来做不同的事。
+     * */
     expectedControllerZkVersion match {
       case ZkVersion.MatchAnyVersion => retryRequestsUntilConnected(requests)
       case version if version >= 0 =>
@@ -1707,18 +1728,49 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
   }
 
   private def retryRequestsUntilConnected[Req <: AsyncRequest](requests: Seq[Req]): Seq[Req#Response] = {
+    /**
+     * remainingRequests和responses注意到都使用的是可变集合。
+     * */
     val remainingRequests = new mutable.ArrayBuffer(requests.size) ++= requests
     val responses = new mutable.ArrayBuffer[Req#Response]
+    /**
+     * 看起来这一波请求内部是异步等待的，但是整个retryRequestsUntilConnected方法是同步的，但很多时候就一个请求.
+     * 这样和之前的同步接口有什么区别呢 ？有区别的，getChildren整个方法只传入了一个请求自然没区别，
+     * 但是kafka.zk.KafkaZkClient#getTopicPartitionStatesRaw(scala.collection.Seq)方法是传入了多个请求，每个partition一个
+     * 这样区别就大了，特别是在controller处理metadata的时候。
+     *
+     * 2.5版本也是异步的，0.11.0版本是同步的
+     * */
     while (remainingRequests.nonEmpty) {
+      /**
+       * 这里通过调用zooKeeperClient.handleRequests来获取response，
+       * zooKeeperClient.handleRequests方法需要等待传入请求的response都达到后，才返回，阻塞式的。
+       * 那么异步从何说起来？异步是在zooKeeperClient.handleRequests方法里面实现的，如果传入的是多个请求，
+       * 那么在zooKeeperClient.handleRequests方法中会先全部发送出去，然后再阻塞等待所有请求的response到达。
+       *
+       * 批量接收response，所以叫batchResponse
+       * */
       val batchResponses = zooKeeperClient.handleRequests(remainingRequests)
 
+      /**
+       * 对收到的response统计耗时:接收时间戳-发送的时间戳，统计每个请求从从发送到接收的耗时。
+       * */
       batchResponses.foreach(response => latencyMetric.update(response.metadata.responseTimeMs))
 
       // Only execute slow path if we find a response with CONNECTIONLOSS
       if (batchResponses.exists(_.resultCode == Code.CONNECTIONLOSS)) {
+        /**
+         * 这里是把请求和response关联起来，按照顺序关联。那这里肯定是认为先发的请求先获得response，
+         * 否则的话这里用顺序关联请求和response就对应不上，猜测zookeeper服务端也和kafka服务端一样，
+         * 按照收到请求的顺序来处理，上一个请求回完response才能处理下一个。
+         * */
         val requestResponsePairs = remainingRequests.zip(batchResponses)
 
         remainingRequests.clear()
+        /**
+         * 这里需要把链接断开的请求重新放回请求集合中，而成功返回response的放入response集合中。
+         * 所以这里requestResponsePairs中的请求和response才需要对应好.
+         * */
         requestResponsePairs.foreach { case (request, response) =>
           if (response.resultCode == Code.CONNECTIONLOSS)
             remainingRequests += request
@@ -1726,9 +1778,18 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
             responses += response
         }
 
+        /**
+         * 处理完一轮后，如果还有没收到response的请求，那么需要等待并检查下是否都链接上了，没连接上死等链接上。
+         * 没处理完的请求分为只可能是链接是CONNECTIONLOSS这个状态的。
+         *
+         * 等链接上后，继续发送请求。
+         * */
         if (remainingRequests.nonEmpty)
           zooKeeperClient.waitUntilConnected()
       } else {
+        /**
+         * 如果不存在CONNECTIONLOSS的response，那么就清理请求，并把response加入responses集合中
+         * */
         remainingRequests.clear()
         responses ++= batchResponses
       }

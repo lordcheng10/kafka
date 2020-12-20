@@ -84,6 +84,9 @@ class ZooKeeperClient(connectString: String,
   private val isConnectedOrExpiredCondition = isConnectedOrExpiredLock.newCondition()
   private val zNodeChangeHandlers = new ConcurrentHashMap[String, ZNodeChangeHandler]().asScala
   private val zNodeChildChangeHandlers = new ConcurrentHashMap[String, ZNodeChildChangeHandler]().asScala
+  /**
+   * inFlightRequests计数信号量，用来控制并发请求数的，一旦超过，就会阻塞，直到另外的线程释放:Semaphore.release()
+   * */
   private val inFlightRequests = new Semaphore(maxInFlightRequests)
   private val stateChangeHandlers = new ConcurrentHashMap[String, StateChangeHandler]().asScala
   private[zookeeper] val reinitializeScheduler = new KafkaScheduler(threads = 1, s"zk-client-${threadPrefix}reinit-")
@@ -163,14 +166,51 @@ class ZooKeeperClient(connectString: String,
     if (requests.isEmpty)
       Seq.empty
     else {
+      /**
+       * 差点忽略了这里的countDownLatch设计，异步等待原来是在这里就完成了。
+       * 这个方法会同时发多个请求出去，然后等待所有请求的response到达后才返回。
+       *
+       * countDownLatch会计数，初始值是请求数，每收到一个response就countDown减1，而发送完成后，主线程就wait等待，减少为0：
+       * countDownLatch.await()知道减为0后，就继续往下执行，并返回response。
+       * */
       val countDownLatch = new CountDownLatch(requests.size)
       val responseQueue = new ArrayBlockingQueue[Req#Response](requests.size)
 
       requests.foreach { request =>
+        /**
+         * acquire似乎是控制并发的,计数信号量。
+         * 喔  我明白了，inFlightRequests = new Semaphore(maxInFlightRequests)
+         * 这个是一个计数信号量，每调用一次acquire就得判断当前正在调用的数量是否超过了定义时候设置的最大数量，
+         * 如果超过就等待知道别人释放出可用的slot，否则就是没超过，那么使用的数量加一，可用数量减少1，然后就可以往下执行，不用阻塞。
+         * 参考：
+         * https://blog.csdn.net/a19881029/article/details/37557925
+         * */
         inFlightRequests.acquire()
         try {
+          /**
+           * 为什么要加锁？initializationLock是读写锁，在close和重新初始化的时候，持有写锁；
+           * 就是为了防止重新初始化和close的时候  刚干扰到请求的处理。我在处理请求 ，
+           * 然后另外的线程在初始化或者close，肯定是需要加锁互斥的了。
+           * */
           inReadLock(initializationLock) {
+
+            /**
+             * 这里传入请求，并且传入回调方法。这应该是用的柯里化,eg:
+             * def add(x:Int)(y:Int) = x + y
+             *
+             * 这个相当于def add(x:Int)=(y:Int)=>x+y
+             * */
             send(request) { response =>
+              /**
+               * 收到response后，首先放入response队列；然后释放掉inFlightRequests并发调用的一个槽位，让其他可以继续调用该函数，
+               * 最后再countDownLatch.countDown()减1.
+               *
+               * 这里是通过计数信号量inFlightRequests来控制zk的请求并发数的。
+               * 这里控制正在发送请求数的机制和kafka客户端控制的机制不太一样，这里一旦超过就阻塞等待，直到可以发更多为止。
+               * 而kafka客户端 控制到一个单broker的并发数是通过简单计数来控制的，超过那么就暂时不往这个节点发了，不会阻塞。
+               *
+               * 所以这也是为啥kafka客户端没有使用计数信号量来控制到某个broker的并发请求数，因为计数信号量一旦超过阈值要阻塞
+               * */
               responseQueue.add(response)
               inFlightRequests.release()
               countDownLatch.countDown()
@@ -182,21 +222,54 @@ class ZooKeeperClient(connectString: String,
             throw e
         }
       }
+
+      /**
+       * 发送完请求后，就等待response全部到达.
+       * */
       countDownLatch.await()
+      /**
+       * ArrayBlockingQueue是java类，通过asScala然后转换为buffer，但返回参数类型定义 的是 Seq[Req#Response]
+       * Seq到底是一个啥 ？在scala中Seq叫序列，在我们需要序列的地方都可以用array数组来代替，array数组可以支持序列的一切操作。
+       * scala的数组和序列是兼容的，在需要Seq[T]的地方可以用Array[T]来赋值，比如这里，需要的返回值类型是Seq[Req#Response]，
+       * 但是我们返回的是Array[Req#Response],scala的数组支持序列的一切操作。
+       * */
       responseQueue.asScala.toBuffer
     }
   }
 
+  /**
+   * [Req <: AsyncRequest] 这个应该是泛型
+   * processResponse: Req#Response => Unit  这个是kelihua
+   *
+   * 通过一个类型应用另外一个类型？Req#Response
+   * */
   // Visibility to override for testing
   private[zookeeper] def send[Req <: AsyncRequest](request: Req)(processResponse: Req#Response => Unit): Unit = {
     // Safe to cast as we always create a response of the right type
+    /**
+     * 用传入的processResponse来回response
+     * */
     def callback(response: AsyncResponse): Unit = processResponse(response.asInstanceOf[Req#Response])
 
+    /**
+     * 构建metadta  response,这里构建有啥用呢
+     * */
     def responseMetadata(sendTimeMs: Long) = new ResponseMetadata(sendTimeMs, receivedTimeMs = time.hiResClockMs())
 
+    /**
+     * 奇怪 time.hiResClockMs()这里非要用纳秒转毫秒干嘛 直接调用time.milliseconds()不行吗
+     * 有点脱了裤子放屁 的感觉
+     * */
     val sendTimeMs = time.hiResClockMs()
+    /**
+     * 这里就是主要逻辑了：安装不同类型的request来处理
+     * */
     request match {
       case ExistsRequest(path, ctx) =>
+        /**
+         * 判断目录是否存在的请求，这里似乎是通过回调函数来实现异步，之前的zk版本似乎是阻塞的，也就是这个方法必须返回值才结束。
+         * 这个应该是高版本zk的异步机制：通过回调来获取，而不用死等该方法的返回值
+         * */
         zooKeeper.exists(path, shouldWatch(request), new StatCallback {
           def processResult(rc: Int, path: String, ctx: Any, stat: Stat): Unit =
             callback(ExistsResponse(Code.get(rc), path, Option(ctx), stat, responseMetadata(sendTimeMs)))
