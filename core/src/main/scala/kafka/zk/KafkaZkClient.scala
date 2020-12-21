@@ -1715,11 +1715,20 @@ class KafkaZkClient private[zk] (zooKeeperClient: ZooKeeperClient, isSecure: Boo
 
   private def retryRequestsUntilConnected[Req <: AsyncRequest](requests: Seq[Req], expectedControllerZkVersion: Int): Seq[Req#Response] = {
     /**
-     * 根据controller版本号来做不同的事。
+     * 根据controller zk的版本号来做不同的事。
+     * 为什么要区分zk的版本号呢？
      * */
     expectedControllerZkVersion match {
+        /**
+         * 这里的匹配规则写得非常赞。
+         * 第一个case 是匹配ZkVersion.MatchAnyVersion ，
+         * 后面的是匹配大于等于0的变量，居然还有这种写法，在匹配的变量后面加if语句；
+         * */
       case ZkVersion.MatchAnyVersion => retryRequestsUntilConnected(requests)
       case version if version >= 0 =>
+        /**
+         *
+         * */
         retryRequestsUntilConnected(requests.map(wrapRequestWithControllerEpochCheck(_, version)))
           .map(unwrapResponseWithControllerEpochCheck(_).asInstanceOf[Req#Response])
       case invalidVersion =>

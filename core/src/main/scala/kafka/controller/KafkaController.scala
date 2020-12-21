@@ -504,6 +504,11 @@ class KafkaController(val config: KafkaConfig,
   }
 
   /**
+   * 主要是做两件事：
+   * ①发送metadata请求；
+   * ②处理新增broker上对应的副本，主要包括：副本状态变更、leader选举、判断ressign副本、topic删除操作判断；
+   * ③注册新broker的zk监听；
+   *
    * This callback is invoked by the replica state machine's broker change listener, with the list of newly started
    * brokers as input. It does the following -
    * 1. Sends update metadata request to all live and shutting down brokers
@@ -587,7 +592,7 @@ class KafkaController(val config: KafkaConfig,
       topicDeletionManager.resumeDeletionForTopics(replicasForTopicsToBeDeleted.map(_.topic))
     }
     /**
-     * 注册brokerId对应的hanlder监听器
+     * 注册brokerId对应的hanlder监听器，这里实际是放一个事件到eventmanager的队列中，然后会有一个线程取出来处理，注意是单线程处理。
      * */
     registerBrokerModificationsHandler(newBrokers)
   }
@@ -621,7 +626,11 @@ class KafkaController(val config: KafkaConfig,
    * as input. It will call onReplicaBecomeOffline(...) with the list of replicas on those failed brokers as input.
    */
   private def onBrokerFailure(deadBrokers: Seq[Int]): Unit = {
+    /**
+     * 这里把deadBrokers按照逗号分隔。
+     * */
     info(s"Broker failure callback for ${deadBrokers.mkString(",")}")
+
     deadBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
     val deadBrokersThatWereShuttingDown =
       deadBrokers.filter(id => controllerContext.shuttingDownBrokerIds.remove(id))
@@ -1634,6 +1643,10 @@ class KafkaController(val config: KafkaConfig,
      * curBrokerAndEpochs： 集群中所有broker和epoch  map<Broker,Long>
      * curBrokerIdAndEpochs：从curBrokerAndEpochs中过滤出brokerId和epoch，map<brokerId,epoch>
      * curBrokerIds：所含有的brokerId
+     *
+     * zk上读取信息构建出broker和epoch映射的变量curBrokerAndEpochs -> curBrokerAndEpochs构建出brokerId和epoch映射的变量 -> 从curBrokerIdAndEpochs构建出当前的broker id集合：curBrokerIds
+     *
+     * liveOrShuttingDownBrokerIds是直接从controllerContext.liveOrShuttingDownBrokerIds中引用而来。
      * */
     val curBrokerAndEpochs = zkClient.getAllBrokerAndEpochsInCluster
     val curBrokerIdAndEpochs = curBrokerAndEpochs map { case (broker, epoch) => (broker.id, epoch) }
@@ -1641,6 +1654,8 @@ class KafkaController(val config: KafkaConfig,
     val liveOrShuttingDownBrokerIds = controllerContext.liveOrShuttingDownBrokerIds
     /**
      * 相对于0.11.0版本，这里用diff取代了--(因为Scala 2.13.2使用--会有warn警告)
+     * 新的broker列表=当前从zk上读取的 -  内存中维护的全量列表
+     * 挂掉的broker列表=内存中维护的全量列表 - 当前zk上的列表
      * */
     val newBrokerIds = curBrokerIds.diff(liveOrShuttingDownBrokerIds)
     val deadBrokerIds = liveOrShuttingDownBrokerIds.diff(curBrokerIds)
@@ -1673,7 +1688,7 @@ class KafkaController(val config: KafkaConfig,
 
 
     /**
-     * 这里开始处理各个类型的broker，上面都是在对broker排序
+     * 这里开始处理各个类型的broker，上面都是在对broker进行分类
      * */
     newBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
     /**
@@ -1690,6 +1705,7 @@ class KafkaController(val config: KafkaConfig,
      * */
     if (newBrokerIds.nonEmpty) {
       /**
+       * 从新增的broker列表中拆分出兼容和不兼容新特性的两类节点，兼容不兼容主要就是根据版本号来
        * newCompatibleBrokerAndEpochs：兼容的
        * newIncompatibleBrokerAndEpochs：不兼容的
        * */
@@ -1702,6 +1718,10 @@ class KafkaController(val config: KafkaConfig,
       /**
        * 0.11.0是采用的直接覆盖的方式.
        * controllerContext.liveBrokers = curBrokers
+       *
+       * 对newBrokerIds.nonEmpty的处理主要就是这两步：
+       * controllerContext.addLiveBrokers(newCompatibleBrokerAndEpochs)：是把兼容的broker列表添加到存活列表中
+       * onBrokerStartup(newBrokerIdsSorted)
        * */
       controllerContext.addLiveBrokers(newCompatibleBrokerAndEpochs)
 
@@ -1712,10 +1732,17 @@ class KafkaController(val config: KafkaConfig,
     }
 
     /**
-     * 
+     * bouncedBrokerIds是Epoch号发生跳跃的broker列表
      * */
     if (bouncedBrokerIds.nonEmpty) {
+      /**
+       *首先从活着的broker中移除epoch号发生变化的broker列表.
+       * */
       controllerContext.removeLiveBrokers(bouncedBrokerIds)
+      /**
+       * bouncedBrokerIdsSorted是bouncedBrokerIds按照brokerId排序后的结果
+       * 然后对这些broker列表进行处理。
+       * */
       onBrokerFailure(bouncedBrokerIdsSorted)
       val (bouncedCompatibleBrokerAndEpochs, bouncedIncompatibleBrokerAndEpochs) =
         partitionOnFeatureCompatibility(bouncedBrokerAndEpochs)
@@ -1723,9 +1750,14 @@ class KafkaController(val config: KafkaConfig,
         warn("Ignoring registration of bounced brokers due to incompatibilities with finalized features: " +
           bouncedIncompatibleBrokerAndEpochs.map { case (broker, _) => broker.id }.toSeq.sorted.mkString(","))
       }
+      /**
+       * 有个问题哈，为啥要兼容的才放到liveBrokers里面。我猜测是不兼容的broker controller没法管理
+       * */
       controllerContext.addLiveBrokers(bouncedCompatibleBrokerAndEpochs)
       onBrokerStartup(bouncedBrokerIdsSorted)
     }
+
+
     if (deadBrokerIds.nonEmpty) {
       controllerContext.removeLiveBrokers(deadBrokerIds)
       onBrokerFailure(deadBrokerIdsSorted)
