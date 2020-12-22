@@ -621,8 +621,10 @@ class KafkaController(val config: KafkaConfig,
     }
   }
 
-  /*
-   * This callback is invoked by the replica state machine's broker change listener with the list of failed brokers
+  /**
+   *  看起来这个方法主要做一些replica的状态变更，和取消一些监听注册。
+   *
+   *  This callback is invoked by the replica state machine's broker change listener with the list of failed brokers
    * as input. It will call onReplicaBecomeOffline(...) with the list of replicas on those failed brokers as input.
    */
   private def onBrokerFailure(deadBrokers: Seq[Int]): Unit = {
@@ -630,8 +632,12 @@ class KafkaController(val config: KafkaConfig,
      * 这里把deadBrokers按照逗号分隔。
      * */
     info(s"Broker failure callback for ${deadBrokers.mkString(",")}")
-
+    /**
+     * 这行代码从replicasOnOfflineDirs中移除挂掉的节点，那么问题来了replicasOnOfflineDirs代表什么含义？
+     * 突然想起来了，这个replicasOnOfflineDirs虽然命名是dir，但实际不是zk目录，相当于我们假设的一个副本下线的'目录'
+     * */
     deadBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
+
     val deadBrokersThatWereShuttingDown =
       deadBrokers.filter(id => controllerContext.shuttingDownBrokerIds.remove(id))
     if (deadBrokersThatWereShuttingDown.nonEmpty)
@@ -1686,8 +1692,9 @@ class KafkaController(val config: KafkaConfig,
       s"bounced brokers: ${bouncedBrokerIdsSorted.mkString(",")}, " +
       s"all live brokers: ${liveBrokerIdsSorted.mkString(",")}")
 
-
     /**
+     * addBroker和removeBroker这两个方法主要是去管理controller和broker通信用的模块。
+     *
      * 这里开始处理各个类型的broker，上面都是在对broker进行分类
      * */
     newBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
@@ -1699,6 +1706,7 @@ class KafkaController(val config: KafkaConfig,
     bouncedBrokerAndEpochs.keySet.foreach(controllerChannelManager.addBroker)
 
     deadBrokerIds.foreach(controllerChannelManager.removeBroker)
+
 
     /**
      *  对新增的broker进行版本兼容判断，对于兼容的broker，才进行注册，否则忽略。
@@ -1757,12 +1765,19 @@ class KafkaController(val config: KafkaConfig,
       onBrokerStartup(bouncedBrokerIdsSorted)
     }
 
-
+    /**
+     * 对于挂掉的broker，要从存活列表中移除。
+     * 另外对这些broker做一些失败处理。
+     * 那么对于挂掉的broker主要做哪些失败处理呢？
+     * */
     if (deadBrokerIds.nonEmpty) {
       controllerContext.removeLiveBrokers(deadBrokerIds)
       onBrokerFailure(deadBrokerIdsSorted)
     }
 
+    /**
+     * 当有新增、挂掉、版本号跳跃着几类broker的时候，需要打印出Map<broker，epoch>的映射关系，因为此时肯定有epoch更新或添加。
+     * */
     if (newBrokerIds.nonEmpty || deadBrokerIds.nonEmpty || bouncedBrokerIds.nonEmpty) {
       info(s"Updated broker epochs cache: ${controllerContext.liveBrokerIdAndEpochs}")
     }
