@@ -529,6 +529,8 @@ class KafkaController(val config: KafkaConfig,
      * 如果他们所对对应的broker启动起来了，那么就从replicasOnOfflineDirs中移除该broker，
      * 这个好像是，当broker宕机的时候，在这个broker上的partiton就会迁到replicasOnOfflineDirs中，
      * 当broker启动起来后，这个broker上的副本就活过来了，可以从replicasOnOfflineDirs中移掉。
+     *
+     * replicasOnOfflineDirs这个变量的理解感觉有问题，它里面的元素到底代表啥。
      * */
     newBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
 
@@ -537,7 +539,7 @@ class KafkaController(val config: KafkaConfig,
      * */
     val newBrokersSet = newBrokers.toSet
     /**
-     * 先给没在newBrokersSet集合中的broker发metadata信息.再给newBrokersSet中的发。
+     * 先给没在existingBrokers集合中的broker发metadata信息.再给newBrokersSet中的发。
      * 这样做目的是:为了防止给newBrokersSet和liveOrShuttingDownBrokerIds交集的broker发送两次metadata.
      * */
     val existingBrokers = controllerContext.liveOrShuttingDownBrokerIds.diff(newBrokersSet)
@@ -563,6 +565,8 @@ class KafkaController(val config: KafkaConfig,
     val allReplicasOnNewBrokers = controllerContext.replicasOnBrokers(newBrokersSet)
     /**
      * 对这些副本，进行状态转换，变为Online.
+     * 这里的更新副本状态到online具体做了啥操作,副本状态机，主要就是触发leaderAndIsr 、metadata更新、stop replica这三类。
+     * 这里是offline -> online ，主要是发leaderAndIsr请求。
      * */
     replicaStateMachine.handleStateChanges(allReplicasOnNewBrokers.toSeq, OnlineReplica)
     // when a new broker comes up, the controller needs to trigger leader election for all new and offline partitions
@@ -635,14 +639,37 @@ class KafkaController(val config: KafkaConfig,
     /**
      * 这行代码从replicasOnOfflineDirs中移除挂掉的节点，那么问题来了replicasOnOfflineDirs代表什么含义？
      * 突然想起来了，这个replicasOnOfflineDirs虽然命名是dir，但实际不是zk目录，相当于我们假设的一个副本下线的'目录'
+     *
+     * replicasOnOfflineDirs里面放的是在leader and isr过程中，处于stop replica状态的partition，在处理dead broker的时候，
+     * 如果该broker上存在这种partition那么需要从该map中移除掉。
      * */
     deadBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
 
+    /**
+     * 从shuttingDownBrokerIds里面移调，这有是啥玩意?
+     * 明白了，当broker 在stop的时候，会发送一个controller shutdown的rpc请求给controller，controller收到后会放到eventmanager中，等待处理线程处理。
+     *
+     * 如果在这个broker宕机前刚好发了一次broker shutdown给controller，controller先感知到宕机节点变化，那么就会先处理broker变更操作，在处理过程中，
+     * shutdown rpc到达并将shutdown broker id放入了shuttingDownBrokerIds中，那么在处理broker变化的时候，
+     * 就会从中移除掉，避免多次处理。
+     * */
     val deadBrokersThatWereShuttingDown =
       deadBrokers.filter(id => controllerContext.shuttingDownBrokerIds.remove(id))
+
+    /**
+     * 对于这种宕机前又发了shutdown broker  rpc的节点，需要通过日志打出来。
+     * */
     if (deadBrokersThatWereShuttingDown.nonEmpty)
       info(s"Removed ${deadBrokersThatWereShuttingDown.mkString(",")} from list of shutting down brokers.")
+
+    /**
+     * 过滤出在下线broker上的所有副本。
+     * */
     val allReplicasOnDeadBrokers = controllerContext.replicasOnBrokers(deadBrokers.toSet)
+
+    /**
+     * 然后对于这些副本变更状态，做下线操作：下线处理操作包含哪些呢
+     * */
     onReplicasBecomeOffline(allReplicasOnDeadBrokers)
 
     unregisterBrokerModificationsHandler(deadBrokers)
@@ -665,17 +692,30 @@ class KafkaController(val config: KafkaConfig,
     * partitions coming online.
     */
   private def onReplicasBecomeOffline(newOfflineReplicas: Set[PartitionAndReplica]): Unit = {
+    /***
+     * 通过topic删除manager来分类下线的partition 副本,可以分为两类：①下线不删除的副本；②下线要删除的副本；
+     * 那么问题来了，这两类副本是怎么产生的？怎么会有下线不删除的副本。 应该是宕机或者broker临时stop的节点，
+     * 上面的副本是处于下线，但暂时不删除的状态。而对于，要删除的topic，那么其对应副本是下线，要删除的状态。
+     */
     val (newOfflineReplicasForDeletion, newOfflineReplicasNotForDeletion) =
       newOfflineReplicas.partition(p => topicDeletionManager.isTopicQueuedUpForDeletion(p.topic))
 
+    /**
+     * 从context中获取要下线的leader
+     * */
     val partitionsWithOfflineLeader = controllerContext.partitionsWithOfflineLeader
 
+    /**
+     * 下面就是partition和replica状态机转换。
+     * 这里和我们本次要下线的broker 副本有啥关系呢？
+     * */
     // trigger OfflinePartition state for all partitions whose current leader is one amongst the newOfflineReplicas
     partitionStateMachine.handleStateChanges(partitionsWithOfflineLeader.toSeq, OfflinePartition)
     // trigger OnlinePartition state changes for offline or new partitions
     partitionStateMachine.triggerOnlinePartitionStateChange()
     // trigger OfflineReplica state change for those newly offline replicas
     replicaStateMachine.handleStateChanges(newOfflineReplicasNotForDeletion.toSeq, OfflineReplica)
+
 
     // fail deletion of topics that are affected by the offline replicas
     if (newOfflineReplicasForDeletion.nonEmpty) {
@@ -685,6 +725,9 @@ class KafkaController(val config: KafkaConfig,
       topicDeletionManager.failReplicaDeletion(newOfflineReplicasForDeletion)
     }
 
+    /**
+     * 发送metadata
+     * */
     // If replica failure did not require leader re-election, inform brokers of the offline brokers
     // Note that during leader re-election, brokers update their metadata
     if (partitionsWithOfflineLeader.isEmpty) {
@@ -1427,18 +1470,49 @@ class KafkaController(val config: KafkaConfig,
     }
   }
 
+  /**
+   * controller给broker发leaderAndIsr请求，然后broker会回个response过来，controller收到leader and isr的reponse后需要进行处理。
+   *
+   * 那么问题来了 怎么处理leaderAndIsrResponse的呢？
+   *
+   * 其实看这个方法的最初目的是为了弄清楚controllerContext.replicasOnOfflineDirs中存放的到底是什么情况的副本。
+   * */
   private def processLeaderAndIsrResponseReceived(leaderAndIsrResponse: LeaderAndIsrResponse, brokerId: Int): Unit = {
+    /**
+     * 如果不再是controller了，就直接返回，不做任何处理了。
+     * */
     if (!isActive) return
 
+    /**
+     * 如果发现本次的leaderAndIsr处理有异常报错，那么就输出一个错误日志，然后返回，不做任何处理。
+     * */
     if (leaderAndIsrResponse.error != Errors.NONE) {
       stateChangeLogger.error(s"Received error ${leaderAndIsrResponse.error} in LeaderAndIsr " +
         s"response $leaderAndIsrResponse from broker $brokerId")
       return
     }
 
+
+    /**
+     * 那么接下来就是leaderAndIsr处理正常的情况 ，此时controller应该要记录下broker的一些状态信息，
+     * 这可能也是该rpc要处理reponse的原因，原来controller发送给broker的请求rpc是不关心reponse的，
+     * 或者说是不处理reponse的，但我似乎发现，broker收到leaderAndIsr请求后，都是要回reponse的，
+     * 0.11.0也是回了的，那也就是之前的controller对应这种reponse是直接忽略了的
+     *
+     * 喔 ，知道了。其实controller发往broker的所有请求都是可以带callback的，如果不想处理，那么不用传入callback处理函数，
+     * 那么底层NetworkClient网络处理模块，在收到reponse的时候就没有callback方法可以调用，也就不会处理reponse，
+     * 以前leaderAndIsr请求是不会传入callback的，比如0.11.0版本。但是当前的版本需要处理leaderAndIsr的reponse，所以传入了callback，
+     * 除了leaderAndIsr请求外，stopreplica请求也是要处理reponse的，这个在0.11.0版本就会处理了。
+     *
+     * 有个问题哈，trunk版本对哪些请求都处理了response，为什么？0.11.0版本的controller处理了那些请求的reponse？这个后面可以整理下。
+     * */
     val offlineReplicas = new ArrayBuffer[TopicPartition]()
     val onlineReplicas = new ArrayBuffer[TopicPartition]()
 
+    /**
+     * broker发过来的reponse主要是为了告诉我们它上面的那些副本目前是处于offline的，那些是online的？broker是怎么分的呢？
+     * 那些分成了offline，哪些分成了online？
+     * */
     leaderAndIsrResponse.partitions.forEach { partition =>
       val tp = new TopicPartition(partition.topicName, partition.partitionIndex)
       if (partition.errorCode == Errors.KAFKA_STORAGE_ERROR.code)
@@ -1633,7 +1707,7 @@ class KafkaController(val config: KafkaConfig,
 
   private def processBrokerChange(): Unit = {
     /**
-     * 如果不再是controller了，那么久直接返回，不处理事件。
+     * 如果不再是controller了，那么就直接返回，不处理事件。
      * 是为了防止，不是controller了还在发请求给broker，或者在切换的过程中出现两个controller同时发送请求的情况。
      * 其实除了controller宕机，触发的controller切换外，都有可能存在两个controller同时发送请求的情况，此时只能通过请求的epoch号来区分，
      * broker通过判断epoch号来防止更新到旧的状态信息。
@@ -1641,7 +1715,7 @@ class KafkaController(val config: KafkaConfig,
     if (!isActive) return
     /**
      * 这里相对于0.11.0版本，除了获取brokerId外，还获取了对应的Epoch号.
-     * 并且用KafkaZkClient替代了之前的ZkUtil类。
+     * 并且用KafkaZkClient替代了之前的ZkUtil类,这里的KafkaZkClient主要是为了实现zk异步响应请求.
      * 用epoch号，是为了区分出那些虽然不在new broker里面，但因为某些原因和zk短暂的断开过链接的节点，这些节点需要关闭链接后，重新走下add流程。
      *
      * 用KafkaZkClient替代之前的ZkUtil类是出于什么考虑？看起来似乎是为了使用异步zk客户端，高版本的zk支持异步方式。
@@ -1719,6 +1793,7 @@ class KafkaController(val config: KafkaConfig,
        * */
       val (newCompatibleBrokerAndEpochs, newIncompatibleBrokerAndEpochs) =
         partitionOnFeatureCompatibility(newBrokerAndEpochs)
+
       if (!newIncompatibleBrokerAndEpochs.isEmpty) {
         warn("Ignoring registration of new brokers due to incompatibilities with finalized features: " +
           newIncompatibleBrokerAndEpochs.map { case (broker, _) => broker.id }.toSeq.sorted.mkString(","))

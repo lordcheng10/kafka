@@ -108,9 +108,14 @@ class ControllerContext {
    * 也就是说 这个变量在kafka controller处理leader and isr请求的时候，才会更新。
    *
    * key是brokerId，value是上面的partition集合。
+   *
+   * replicasOnOfflineDirs这个变量到底代表啥 ，上面的解释感觉有问题  不准确。
    * */
   val replicasOnOfflineDirs = mutable.Map.empty[Int, Set[TopicPartition]]
 
+  /**
+   * 这个是同步zk上的topic删除目录的
+   * */
   val topicsToBeDeleted = mutable.Set.empty[String]
 
   /** The following topicsWithDeletionStarted variable is used to properly update the offlinePartitionCount metric.

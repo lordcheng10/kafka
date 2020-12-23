@@ -190,6 +190,11 @@ class TopicDeletionManager(config: KafkaConfig,
       false
   }
 
+  /**
+   * 如果是关闭了删除开关的，那么直接返回false。
+   * 否则的话，就去从controller context中要删除的topic集合中去判断：topicsToBeDeleted，如果存在，就是属于要排队删除的topic。
+   * 而context中要删除的topic集合是从zk上的删除topic目录中同步过来的。
+   * */
   def isTopicQueuedUpForDeletion(topic: String): Boolean = {
     if (isDeleteTopicEnabled) {
       controllerContext.isTopicQueuedUpForDeletion(topic)
