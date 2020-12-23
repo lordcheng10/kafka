@@ -85,6 +85,14 @@ class ControllerChannelManager(controllerContext: ControllerContext,
    * 并且添加的是全量broker节点:liveOrShuttingDownBrokers
    *
    * 这里感觉有bug
+   *
+   * trunk版本 不会出现一个发送线程被启动两次的情况，因为成为controller事件也是放到事件队列中的，然后下游都是单线程处理的。当然也不会出现同一个broker被添加两次的情况。
+   *
+   * 但这里总感觉会加两次。。。,不会加两次，因为，0.11.0版本也是基于事件处理的，下游一样是单线程处理，大家都是放到队列中排队处理，不会出现同时有两个或者多个线程同时添加或启动线程的情况。
+   *
+   *
+   * 这行代码要执行，只会在两个事件中：①Reelect（重新选举成为controller事件）；②startUp事件;这两个事件依然是放到事件队列中的，所以这里不会有bug。
+   *
    * */
   controllerContext.liveBrokers.foreach(addNewBroker)
 
@@ -124,7 +132,14 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     // be careful here. Maybe the startup() API has already started the request send thread
     brokerLock synchronized {
       if(!brokerStateInfo.contains(broker.id)) {
+        /**
+         * 有个问题：为什么在addNewBroker中，构建requestThread的时候 不启动requestThread，要单独在startRequestSendThread中去启动。
+         * */
         addNewBroker(broker)
+        /**
+         * 为啥要单独在这启动呢？直接在addNewBroker方法末尾启动不行吗？
+         * 感觉是为了逻辑更加清晰一点，所以拆开了，上面是添加，下面是启动方法。
+         * */
         startRequestSendThread(broker.id)
       }
     }

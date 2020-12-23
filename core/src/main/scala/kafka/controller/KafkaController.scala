@@ -695,6 +695,12 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
      * 该接口用来实现一些，需要在zk初始化之前做的一些抢占式的工作。
      * */
     override def process(): Unit = {
+      /**
+       * 如果不再是controller了，那么久直接返回，不处理事件。
+       * 是为了防止，不是controller了还在发请求给broker，或者在切换的过程中出现两个controller同时发送请求的情况。
+       * 其实除了controller宕机，触发的controller切换外，都有可能存在两个controller同时发送请求的情况，此时只能通过请求的epoch号来区分，
+       * broker通过判断epoch号来防止更新到旧的状态信息。
+       * */
       if (!isActive) return
       // Read the current broker list from ZK again instead of using currentBrokerList to increase
       // the odds of processing recent broker changes in a single ControllerEvent (KAFKA-5502).
