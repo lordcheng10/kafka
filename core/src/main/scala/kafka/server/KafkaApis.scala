@@ -271,9 +271,25 @@ class KafkaApis(val requestChannel: RequestChannel,
     // ensureTopicExists is only for client facing requests
     // We can't have the ensureTopicExists check here since the controller sends it as an advisory to all brokers so they
     // stop serving data to clients for the topic being deleted
+    /**
+     * correlationId：关联id
+     * leaderAndIsrRequest：leader and isr请求.
+     * */
     val correlationId = request.header.correlationId
     val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
 
+    /**
+     * 对于读我们有group coordinator，对于写我们有transaction coordinator。
+     * 分别对应两个特殊的topic：__consumer_offsets和__transaction_state
+     *
+     * 这个方法onLeadershipChange的主要意思是：当前broker上，切换成leader的副本，如果是对应两个特殊的topic，那么需要走一个load过程，
+     * 比如：consumer offset的某个partition的leader发生切换后，新leader第一件事就是load offset到内存。
+     * 那么对于transaction_state的topic leader切换也是如此。
+     *
+     * 当然成为leader，也就有成为follower，如果是两个特殊topic的副本成为follower，那么就需要进行卸载操作。
+     *
+     * 那么问题来了，这两个特殊topic，具体的load和卸载过程是怎样的呢？
+     * */
     def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]): Unit = {
       // for each new leader or follower, call coordinator to handle consumer group migration.
       // this callback is invoked under the replica state change lock to ensure proper order of
@@ -293,7 +309,16 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
     }
 
+
+    /**
+     * 检查这个请求是否有cluster操作权限.
+     * 这个设计是为了防止随便一个客户端伪造一个leader and isr请求过来就完蛋了。
+     * */
     authorizeClusterOperation(request, CLUSTER_ACTION)
+
+    /**
+     * 首先检查请求中的epoch版本号是否正确，如果不正确就会带有STALE_BROKER_EPOCH错误码的reponse，否则就回正常的reponse。
+     * */
     if (isBrokerEpochStale(leaderAndIsrRequest.brokerEpoch)) {
       // When the broker restarts very quickly, it is possible for this broker to receive request intended
       // for its previous generation so the broker should skip the stale request.
@@ -304,6 +329,8 @@ class KafkaApis(val requestChannel: RequestChannel,
       val response = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, onLeadershipChange)
       sendResponseExemptThrottle(request, response)
     }
+
+
   }
 
   def handleStopReplicaRequest(request: RequestChannel.Request): Unit = {
@@ -3437,11 +3464,25 @@ class KafkaApis(val requestChannel: RequestChannel,
     requestChannel.sendResponse(response)
   }
 
+
+  /**
+   * LeaderAndIsr/UpdateMetadata/StopReplica这三类请求的epoch是unknown类型，
+   * 如果不是这三类请求，那么就看请求中的epoch号是否大于等于保存在broker中的controller的epoch号，如果大于等于才是正常的。
+   *
+   * 这里是正常的epoch号返回false，否则返回true。外部对于true会有相应的处理
+   * */
   private def isBrokerEpochStale(brokerEpochInRequest: Long): Boolean = {
     // Broker epoch in LeaderAndIsr/UpdateMetadata/StopReplica request is unknown
     // if the controller hasn't been upgraded to use KIP-380
     if (brokerEpochInRequest == AbstractControlRequest.UNKNOWN_BROKER_EPOCH) false
     else {
+      /**
+       * 这里的注释好像在描述一种 请求中的版本号大于broker中缓存的controller版本号的场景。 但我似乎没明白。
+       * 好像是说，在broker还没来得及更新缓存中的epoch号的时候，controller发送请求过来了，此时请求中的epoch号是新的，
+       * broker中的缓存号是老的，所以自然就大于缓存的。
+       *
+       * 那么问题来了 broker中缓存的controller epoch号什么时候更新？有可能在它还没来得及更新前，就收到controller下发的带有新epoch号的请求吗？
+       * */
       // brokerEpochInRequest > controller.brokerEpoch is possible in rare scenarios where the controller gets notified
       // about the new broker epoch and sends a control request with this epoch before the broker learns about it
       brokerEpochInRequest < controller.brokerEpoch

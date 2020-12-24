@@ -22,6 +22,10 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import java.util.HashMap;
 import java.util.Locale;
 
+
+/**
+ * 这个枚举类,代表了所有的权限级别。
+ * */
 /**
  * Represents an operation which an ACL grants or denies permission to perform.
  *
