@@ -1511,7 +1511,7 @@ class KafkaController(val config: KafkaConfig,
 
     /**
      * broker发过来的reponse主要是为了告诉我们它上面的那些副本目前是处于offline的，那些是online的？broker是怎么分的呢？
-     * 那些分成了offline，哪些分成了online？
+     * 那些分成了offline，哪些分成了online？这个得看下broker收到leader and isr请求后的处理逻辑,看起来这里的offline和online是这个处理逻辑定义的。
      * */
     leaderAndIsrResponse.partitions.forEach { partition =>
       val tp = new TopicPartition(partition.topicName, partition.partitionIndex)
@@ -1521,11 +1521,30 @@ class KafkaController(val config: KafkaConfig,
         onlineReplicas += tp
     }
 
+
+
+    /**
+     * 这里把之前下线的offline请求拿出来
+     * */
     val previousOfflineReplicas = controllerContext.replicasOnOfflineDirs.getOrElse(brokerId, Set.empty[TopicPartition])
+    /**
+     * 当前下线的副本= 之前下线的副本 - 本次在线的副本 + 本次下线的副本
+     * */
     val currentOfflineReplicas = mutable.Set() ++= previousOfflineReplicas --= onlineReplicas ++= offlineReplicas
+
+    /**
+     * 然后把刷选出的当前下线的副本放入replicasOnOfflineDirs中
+     * */
     controllerContext.replicasOnOfflineDirs.put(brokerId, currentOfflineReplicas)
+    /**
+     * 新的下线副本=当前下线副本-之前的下线副本
+     * */
     val newOfflineReplicas = currentOfflineReplicas.diff(previousOfflineReplicas)
 
+    /**
+     * 对于新的下线副本，需要更改下副本状态为offline.
+     *
+     * */
     if (newOfflineReplicas.nonEmpty) {
       stateChangeLogger.info(s"Mark replicas ${newOfflineReplicas.mkString(",")} on broker $brokerId as offline")
       onReplicasBecomeOffline(newOfflineReplicas.map(PartitionAndReplica(_, brokerId)))
