@@ -908,6 +908,14 @@ class GroupCoordinator(val brokerId: Int,
    * @param offsetTopicPartitionId The partition we are now leading
    */
   def onElection(offsetTopicPartitionId: Int): Unit = {
+    /**
+     * 被选举成为GroupCoordinator，首先是在scheduleLoadGroupAndOffsets中启动一个schedule线程。
+     *
+     * TODO-疑问1：那么scheduleLoadGroupAndOffsets方法具体干啥呢？
+     * offsetTopicPartitionId 参数是成为group coordinator partition leader的brokerId。
+     *
+     * coordinator意思是协调员，group的协调员。
+     * */
     info(s"Elected as the group coordinator for partition $offsetTopicPartitionId")
     groupManager.scheduleLoadGroupAndOffsets(offsetTopicPartitionId, onGroupLoaded)
   }

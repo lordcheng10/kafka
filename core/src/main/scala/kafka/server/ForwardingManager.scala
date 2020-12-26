@@ -27,6 +27,9 @@ import org.apache.kafka.common.utils.Time
 
 import scala.compat.java8.OptionConverters._
 
+/**
+ * 这个转发请求看起来像我写的那个
+ * */
 class ForwardingManager(metadataCache: kafka.server.MetadataCache,
                         time: Time,
                         metrics: Metrics,

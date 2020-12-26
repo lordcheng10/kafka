@@ -529,16 +529,31 @@ class GroupMetadataManager(brokerId: Int,
    * Asynchronously read the partition from the offsets topic and populate the cache
    */
   def scheduleLoadGroupAndOffsets(offsetsPartition: Int, onGroupLoaded: GroupMetadata => Unit): Unit = {
+    /**
+     * 这里构建__consumer_offsets的partition对象
+     * */
     val topicPartition = new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, offsetsPartition)
+    /**
+     * 通过addLoadingPartition方法将该partition加入到loadingPartitions集合中，表明正在加载的partition；
+     * 放到这个集合中是为了判断某个partition是否正在加载
+     * */
     if (addLoadingPartition(offsetsPartition)) {
       info(s"Scheduling loading of offsets and group metadata from $topicPartition")
       val startTimeMs = time.milliseconds()
+      /**
+       * 然后这里才是正在的放到schedule中异步加载，为了防止leader and isr rpc被阻塞。
+       * 这里可以看到每个parition都会单独有个加载任务，或者说这里我们是按照partition维度来提交任务到schedule线程池去执行的
+       * */
       scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded, startTimeMs))
     } else {
       info(s"Already loading offsets and group metadata from $topicPartition")
     }
   }
 
+  /**
+   * loadGroupsAndOffsets方法主要做两件事：①加载耗时统计metric；②加载offset元数据信息；
+   * 加载主要是在doLoadGroupsAndOffsets中做的
+   * */
   private[group] def loadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit, startTimeMs: java.lang.Long): Unit = {
     try {
       val schedulerTimeMs = time.milliseconds() - startTimeMs
@@ -554,20 +569,34 @@ class GroupMetadataManager(brokerId: Int,
       case t: Throwable => error(s"Error loading offsets from $topicPartition", t)
     } finally {
       inLock(partitionLock) {
+        /**
+         * 加载完成后把该partition放入ownedPartitions中，ownedPartitions记录了该broker负责了哪些partition，
+         * 最后从loading记录中移除该partition，
+         * */
         ownedPartitions.add(topicPartition.partition)
         loadingPartitions.remove(topicPartition.partition)
       }
     }
   }
 
+  /**
+   * 这里才是实际加载offset元数据
+   * */
   private def doLoadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit): Unit = {
     def logEndOffset: Long = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
 
+    /**
+     * 找到对应partition副本log
+     * */
     replicaManager.getLog(topicPartition) match {
       case None =>
         warn(s"Attempted to load offsets and group metadata from $topicPartition, but found no log")
 
       case Some(log) =>
+        /**
+         * 这几个变量什么作用?
+         * loadedOffsets: key是 group名+ topicPartition ，value是
+         * */
         val loadedOffsets = mutable.Map[GroupTopicPartition, CommitRecordMetadataAndOffset]()
         val pendingOffsets = mutable.Map[Long, mutable.Map[GroupTopicPartition, CommitRecordMetadataAndOffset]]()
         val loadedGroups = mutable.Map[String, GroupMetadata]()
@@ -576,17 +605,32 @@ class GroupMetadataManager(brokerId: Int,
         // buffer may not be needed if records are read from memory
         var buffer = ByteBuffer.allocate(0)
 
+        /**
+         * 从最早位置开始加载数据
+         * */
         // loop breaks if leader changes at any time during the load, since logEndOffset is -1
         var currOffset = log.logStartOffset
 
+        /**
+         * 当加载到最新位置后，循环退出。
+         * */
         // loop breaks if no records have been read, since the end of the log has been reached
         var readAtLeastOneRecord = true
 
         while (currOffset < logEndOffset && readAtLeastOneRecord && !shuttingDown.get()) {
+          /**
+           * config.loadBufferSize 是一次读取的最大buffer size，  对应配置是offsets.load.buffer.size   默认值是5M
+           *
+           * isolation 这个变量是新功能，它有几种类型FetchLogEnd、FetchHighWatermark、FetchTxnCommitted，
+           * 分别代表可以读到leo位置、hw位置、producer事务机制确认的位置
+           *
+           * minOneMessage 代表是否至少要读一条消息
+           * */
           val fetchDataInfo = log.read(currOffset,
             maxLength = config.loadBufferSize,
             isolation = FetchLogEnd,
             minOneMessage = true)
+
 
           readAtLeastOneRecord = fetchDataInfo.records.sizeInBytes > 0
 

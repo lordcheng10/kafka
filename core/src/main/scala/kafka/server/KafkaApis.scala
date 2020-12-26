@@ -317,20 +317,28 @@ class KafkaApis(val requestChannel: RequestChannel,
     authorizeClusterOperation(request, CLUSTER_ACTION)
 
     /**
-     * 首先检查请求中的epoch版本号是否正确，如果不正确就会带有STALE_BROKER_EPOCH错误码的reponse，否则就回正常的reponse。
+     * 首先检查请求中的epoch版本号是否正确，如果不正确就会带有STALE_BROKER_EPOCH错误码的reponse，
+     * 否则就回正常的reponse。
      * */
     if (isBrokerEpochStale(leaderAndIsrRequest.brokerEpoch)) {
       // When the broker restarts very quickly, it is possible for this broker to receive request intended
       // for its previous generation so the broker should skip the stale request.
       info("Received LeaderAndIsr request with broker epoch " +
         s"${leaderAndIsrRequest.brokerEpoch} smaller than the current broker epoch ${controller.brokerEpoch}")
+      /**
+       * leaderAndIsrRequest.getErrorResponse是用来得到错误response的。
+       * */
       sendResponseExemptThrottle(request, leaderAndIsrRequest.getErrorResponse(0, Errors.STALE_BROKER_EPOCH.exception))
     } else {
+      /**
+       * replicaManager.becomeLeaderOrFollower 用来生成正常的reponse
+       * */
       val response = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, onLeadershipChange)
+      /**
+       * sendResponseExemptThrottle是进行限速判断的
+       * */
       sendResponseExemptThrottle(request, response)
     }
-
-
   }
 
   def handleStopReplicaRequest(request: RequestChannel.Request): Unit = {
@@ -3477,11 +3485,19 @@ class KafkaApis(val requestChannel: RequestChannel,
     if (brokerEpochInRequest == AbstractControlRequest.UNKNOWN_BROKER_EPOCH) false
     else {
       /**
-       * 这里的注释好像在描述一种 请求中的版本号大于broker中缓存的controller版本号的场景。 但我似乎没明白。
-       * 好像是说，在broker还没来得及更新缓存中的epoch号的时候，controller发送请求过来了，此时请求中的epoch号是新的，
-       * broker中的缓存号是老的，所以自然就大于缓存的。
+       * 这里注释，其实描述的是很简单的场景：
+       * controller重新选举，会导致controller的epoch号发生递增，所有broker在启动的时候，就监听了controller节点，
+       * 当controller发生变化时，所有broker会更新自己内存中的epoch号。
        *
-       * 那么问题来了 broker中缓存的controller epoch号什么时候更新？有可能在它还没来得及更新前，就收到controller下发的带有新epoch号的请求吗？
+       * 但是在broker还没来得及更新前，就收到了controller下发的请求，那么此时请求的epoch号就比内存中保存的大。
+       *
+       * 相等自然是在更新后，收到请求的时候。
+       * 那有个问题哈，broker如果没有被选为controller，那么它也维护controller模块吗
+       * 如果是的话，那么维护controller模块中的那些功能？
+       *
+       * 没有选为controller的节点至少要开启两个功能：
+       * ①监听controller在zk上的目录，随时观察是否有变更；
+       * ②启动event事件管理模块；
        * */
       // brokerEpochInRequest > controller.brokerEpoch is possible in rare scenarios where the controller gets notified
       // about the new broker epoch and sends a control request with this epoch before the broker learns about it
