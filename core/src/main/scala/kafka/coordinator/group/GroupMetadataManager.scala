@@ -624,22 +624,35 @@ class GroupMetadataManager(brokerId: Int,
            * isolation 这个变量是新功能，它有几种类型FetchLogEnd、FetchHighWatermark、FetchTxnCommitted，
            * 分别代表可以读到leo位置、hw位置、producer事务机制确认的位置
            *
-           * minOneMessage 代表是否至少要读一条消息
+           * minOneMessage 代表是否至少要读一条消息 那有个问题 如果这个partiton就是没有数据那怎么办？
+           * 那读出来的fetchDataInfo.records.sizeInBytes就是非整数，从而readAtLeastOneRecord就变成了false，会终止循环
            * */
           val fetchDataInfo = log.read(currOffset,
             maxLength = config.loadBufferSize,
             isolation = FetchLogEnd,
             minOneMessage = true)
 
-
+          /**
+           * 当本次读取数据量为非负数时，就会中断循环
+           * */
           readAtLeastOneRecord = fetchDataInfo.records.sizeInBytes > 0
 
+          /**
+           * FileRecords转换为MemoryRecords
+           * */
           val memRecords = fetchDataInfo.records match {
             case records: MemoryRecords => records
             case fileRecords: FileRecords =>
               val sizeInBytes = fileRecords.sizeInBytes
+              /**
+               * 需要读取的bytes size 从配置的load buffer size和 本次需要读取size中选最大值。
+               * 这样就保证了需要读取size至少是我们配置的 buffer size。
+               * */
               val bytesNeeded = Math.max(config.loadBufferSize, sizeInBytes)
 
+              /**
+               * 如果本次读取的size大于了buffer的最大size，那么久重新开辟一个存储空间.
+               * */
               // minOneMessage = true in the above log.read means that the buffer may need to be grown to ensure progress can be made
               if (buffer.capacity < bytesNeeded) {
                 if (config.loadBufferSize < bytesNeeded)
@@ -648,13 +661,35 @@ class GroupMetadataManager(brokerId: Int,
 
                 buffer = ByteBuffer.allocate(bytesNeeded)
               } else {
+                /**
+                 * 否则清理清理重新用
+                 * */
                 buffer.clear()
               }
 
+              /**
+               * 将fileRecords中的内容全量读取到buffer中
+               * */
               fileRecords.readInto(buffer, 0)
+              /**
+               * 将装载数据的buffer，作为构造参数放入MemoryRecords中,
+               * 那这里有个问题哈，这里是把buffer引入传入进去的，那么下次我如果是调用的buffer.clear启不是把之前装载的也给清理了，
+               * 并且覆盖成新一轮offset元数据信息了？
+               * 不会，因为这里只是加载到buffer，并封装到MemoryRecords中，下面会从MemoryRecords中读出来处理掉。
+               * */
               MemoryRecords.readableRecords(buffer)
           }
 
+          /**
+           * 这里开始进行解压，有个问题，新版本的怎么是batches解压？这个和一起的iter解压有什么不同吗
+           * 这里可以和0.11.0对比下,0.11.0也是调用的batches，看来只有0.10版本以及之前的才是iter。
+           *
+           * 那么有个问题，batches方式又是怎样的？ 这里可能涉及到kafka新版本的消息格式。
+           * 从0.11.0开始就使用的v2版本的消息格式了，v2版本格式可以参考：
+           * https://blog.csdn.net/u013256816/article/details/80300225
+           *
+           * 这里解析数据然后放到上面的几个变量中。
+           * */
           memRecords.batches.forEach { batch =>
             val isTxnOffsetCommit = batch.isTransactional
             if (batch.isControlBatch) {
