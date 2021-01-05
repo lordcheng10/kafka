@@ -98,6 +98,9 @@ public class TransactionManager {
     private final ApiVersions apiVersions;
     private final boolean autoDowngradeTxnCommit;
 
+    /**
+     * 为什么这里叫TopicPartitionBookkeeper名
+     * */
     private static class TopicPartitionBookkeeper {
 
         private final Map<TopicPartition, TopicPartitionEntry> topicPartitions = new HashMap<>();

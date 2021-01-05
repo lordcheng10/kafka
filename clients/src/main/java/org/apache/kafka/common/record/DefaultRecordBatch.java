@@ -240,6 +240,10 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
         outputStream.write(this.buffer.duplicate());
     }
 
+
+    /**
+     * 这里似乎是用attribute字段值和TRANSACTIONAL_FLAG_MASK 运算后的结果来判断是否是trasaction的一部分
+     * */
     @Override
     public boolean isTransactional() {
         return (attributes() & TRANSACTIONAL_FLAG_MASK) > 0;

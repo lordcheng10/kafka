@@ -688,9 +688,17 @@ class GroupMetadataManager(brokerId: Int,
            * 从0.11.0开始就使用的v2版本的消息格式了，v2版本格式可以参考：
            * https://blog.csdn.net/u013256816/article/details/80300225
            *
+           * v2版本的格式，加了很多字段，但借助了变长整型字段来减少内存消耗。增加字段主要是为了增加一些功能。
+           *
            * 这里解析数据然后放到上面的几个变量中。
            * */
           memRecords.batches.forEach { batch =>
+            /**
+             *  batch.isTransactional这个方法是什么意思?我猜测是判断这个batch是否是producer 事务提交的offset。
+             *
+             *  isTransactional这个方法似乎是用header中attribute字段和0x10 求&运算后 与0比较来判断的：
+             *    return (attributes() & TRANSACTIONAL_FLAG_MASK) > 0;
+             * */
             val isTxnOffsetCommit = batch.isTransactional
             if (batch.isControlBatch) {
               val recordIterator = batch.iterator
