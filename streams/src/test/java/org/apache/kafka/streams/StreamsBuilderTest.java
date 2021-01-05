@@ -21,6 +21,7 @@ import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.streams.Topology.AutoOffsetReset;
 import org.apache.kafka.streams.errors.TopologyException;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.ForeachAction;
@@ -60,13 +61,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.regex.Pattern;
 
 import static java.util.Arrays.asList;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class StreamsBuilderTest {
 
@@ -84,10 +88,6 @@ public class StreamsBuilderTest {
 
     @Test
     public void shouldAddGlobalStore() {
-        final Properties properties = new Properties();
-        properties.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, "dummy");
-        properties.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy");
-
         final StreamsBuilder builder = new StreamsBuilder();
         builder.addGlobalStore(
             Stores.keyValueStoreBuilder(
@@ -112,7 +112,7 @@ public class StreamsBuilderTest {
                 }
             }
         );
-        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build(), properties)) {
+        try (final TopologyTestDriver driver = new TopologyTestDriver(builder.build())) {
             final TestInputTopic<String, String> inputTopic =
                 driver.createInputTopic("topic", new StringSerializer(), new StringSerializer());
             inputTopic.pipeInput("hey", "there");
@@ -460,6 +460,35 @@ public class StreamsBuilderTest {
         assertThat(
             internalTopologyBuilder.topicGroups().get(0).nonSourceChangelogTopics().isEmpty(),
             equalTo(true));
+    }
+
+    @Test
+    public void shouldNotReuseRepartitionTopicAsChangelogs() {
+        final String topic = "topic";
+        builder.<Long, String>stream(topic).repartition().toTable(Materialized.as("store"));
+        final Properties props = StreamsTestUtils.getStreamsConfig("appId");
+        props.put(StreamsConfig.TOPOLOGY_OPTIMIZATION_CONFIG, StreamsConfig.OPTIMIZE);
+        final Topology topology = builder.build(props);
+
+        final InternalTopologyBuilder internalTopologyBuilder = TopologyWrapper.getInternalTopologyBuilder(topology);
+        internalTopologyBuilder.rewriteTopology(new StreamsConfig(props));
+
+        assertThat(
+            internalTopologyBuilder.buildTopology().storeToChangelogTopic(),
+            equalTo(Collections.singletonMap("store", "appId-store-changelog"))
+        );
+        assertThat(
+            internalTopologyBuilder.stateStores().keySet(),
+            equalTo(Collections.singleton("store"))
+        );
+        assertThat(
+            internalTopologyBuilder.stateStores().get("store").loggingEnabled(),
+            equalTo(true)
+        );
+        assertThat(
+            internalTopologyBuilder.topicGroups().get(1).stateChangelogTopics.keySet(),
+            equalTo(Collections.singleton("appId-store-changelog"))
+        );
     }
 
     @Test
@@ -893,6 +922,91 @@ public class StreamsBuilderTest {
             STREAM_OPERATION_NAME + "-sink",
             STREAM_OPERATION_NAME + "-source",
             STREAM_OPERATION_NAME);
+    }
+
+    @Test
+    public void shouldAllowStreamsFromSameTopic() {
+        builder.stream("topic");
+        builder.stream("topic");
+        assertBuildDoesNotThrow(builder);
+    }
+
+    @Test
+    public void shouldAllowSubscribingToSamePattern() {
+        builder.stream(Pattern.compile("some-regex"));
+        builder.stream(Pattern.compile("some-regex"));
+        assertBuildDoesNotThrow(builder);
+    }
+
+    @Test
+    public void shouldAllowReadingFromSameCollectionOfTopics() {
+        builder.stream(asList("topic1", "topic2"));
+        builder.stream(asList("topic2", "topic1"));
+        assertBuildDoesNotThrow(builder);
+    }
+
+    @Test
+    public void shouldNotAllowReadingFromOverlappingAndUnequalCollectionOfTopics() {
+        builder.stream(Collections.singletonList("topic"));
+        builder.stream(asList("topic", "anotherTopic"));
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldThrowWhenSubscribedToATopicWithDifferentResetPolicies() {
+        builder.stream("topic", Consumed.with(AutoOffsetReset.EARLIEST));
+        builder.stream("topic", Consumed.with(AutoOffsetReset.LATEST));
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldThrowWhenSubscribedToATopicWithSetAndUnsetResetPolicies() {
+        builder.stream("topic", Consumed.with(AutoOffsetReset.EARLIEST));
+        builder.stream("topic");
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldThrowWhenSubscribedToATopicWithUnsetAndSetResetPolicies() {
+        builder.stream("another-topic");
+        builder.stream("another-topic", Consumed.with(AutoOffsetReset.LATEST));
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldThrowWhenSubscribedToAPatternWithDifferentResetPolicies() {
+        builder.stream(Pattern.compile("some-regex"), Consumed.with(AutoOffsetReset.EARLIEST));
+        builder.stream(Pattern.compile("some-regex"), Consumed.with(AutoOffsetReset.LATEST));
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldThrowWhenSubscribedToAPatternWithSetAndUnsetResetPolicies() {
+        builder.stream(Pattern.compile("some-regex"), Consumed.with(AutoOffsetReset.EARLIEST));
+        builder.stream(Pattern.compile("some-regex"));
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldNotAllowTablesFromSameTopic() {
+        builder.table("topic");
+        builder.table("topic");
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    @Test
+    public void shouldNowAllowStreamAndTableFromSameTopic() {
+        builder.stream("topic");
+        builder.table("topic");
+        assertThrows(TopologyException.class, builder::build);
+    }
+
+    private static void assertBuildDoesNotThrow(final StreamsBuilder builder) {
+        try {
+            builder.build();
+        } catch (final TopologyException topologyException) {
+            fail("TopologyException not expected");
+        }
     }
 
     private static void assertNamesForOperation(final ProcessorTopology topology, final String... expected) {

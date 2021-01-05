@@ -18,9 +18,9 @@ package org.apache.kafka.common.requests;
 
 import org.apache.kafka.common.message.EnvelopeRequestData;
 import org.apache.kafka.common.message.EnvelopeResponseData;
+import org.apache.kafka.common.protocol.ByteBufferAccessor;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.protocol.types.Struct;
 
 import java.nio.ByteBuffer;
 
@@ -36,7 +36,7 @@ public class EnvelopeRequest extends AbstractRequest {
             super(ApiKeys.ENVELOPE);
             this.data = new EnvelopeRequestData()
                             .setRequestData(requestData)
-                            .setRequestPrincipal(ByteBuffer.wrap(serializedPrincipal))
+                            .setRequestPrincipal(serializedPrincipal)
                             .setClientHostAddress(clientAddress);
         }
 
@@ -58,11 +58,6 @@ public class EnvelopeRequest extends AbstractRequest {
         this.data = data;
     }
 
-    public EnvelopeRequest(Struct struct, short version) {
-        super(ApiKeys.ENVELOPE, version);
-        this.data = new EnvelopeRequestData(struct, version);
-    }
-
     public ByteBuffer requestData() {
         return data.requestData();
     }
@@ -71,15 +66,8 @@ public class EnvelopeRequest extends AbstractRequest {
         return data.clientHostAddress();
     }
 
-    public byte[] principalData() {
-        byte[] serializedPrincipal = new byte[data.requestPrincipal().limit()];
-        data.requestPrincipal().get(serializedPrincipal);
-        return serializedPrincipal;
-    }
-
-    @Override
-    protected Struct toStruct() {
-        return data.toStruct(version());
+    public byte[] requestPrincipal() {
+        return data.requestPrincipal();
     }
 
     @Override
@@ -89,6 +77,11 @@ public class EnvelopeRequest extends AbstractRequest {
     }
 
     public static EnvelopeRequest parse(ByteBuffer buffer, short version) {
-        return new EnvelopeRequest(ApiKeys.ENVELOPE.parseRequest(version, buffer), version);
+        return new EnvelopeRequest(new EnvelopeRequestData(new ByteBufferAccessor(buffer), version), version);
+    }
+
+    @Override
+    public EnvelopeRequestData data() {
+        return data;
     }
 }

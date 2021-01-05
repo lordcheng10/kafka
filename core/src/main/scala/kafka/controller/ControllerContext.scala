@@ -19,7 +19,7 @@ package kafka.controller
 
 import kafka.cluster.Broker
 import kafka.utils.Implicits._
-import org.apache.kafka.common.TopicPartition
+import org.apache.kafka.common.{TopicPartition, Uuid}
 
 import scala.collection.{Map, Seq, Set, mutable}
 
@@ -95,6 +95,8 @@ class ControllerContext {
   var epochZkVersion: Int = KafkaController.InitialControllerEpochZkVersion
 
   val allTopics = mutable.Set.empty[String]
+  var topicIds = mutable.Map.empty[String, Uuid]
+  var topicNames = mutable.Map.empty[Uuid, String]
   val partitionAssignments = mutable.Map.empty[String, mutable.Map[Int, ReplicaAssignment]]
   private val partitionLeadershipInfo = mutable.Map.empty[TopicPartition, LeaderIsrAndControllerEpoch]
   val partitionsBeingReassigned = mutable.Set.empty[TopicPartition]
@@ -142,6 +144,8 @@ class ControllerContext {
 
   private def clearTopicsState(): Unit = {
     allTopics.clear()
+    topicIds.clear()
+    topicNames.clear()
     partitionAssignments.clear()
     partitionLeadershipInfo.clear()
     partitionsBeingReassigned.clear()
@@ -150,6 +154,24 @@ class ControllerContext {
     offlinePartitionCount = 0
     preferredReplicaImbalanceCount = 0
     replicaStates.clear()
+  }
+
+  def addTopicId(topic: String, id: Uuid): Unit = {
+    if (!allTopics.contains(topic))
+      throw new IllegalStateException(s"topic $topic is not contained in all topics.")
+
+    topicIds.get(topic).foreach { existingId =>
+      if (!existingId.equals(id))
+        throw new IllegalStateException(s"topic ID map already contained ID for topic " +
+          s"$topic and new ID $id did not match existing ID $existingId")
+    }
+    topicNames.get(id).foreach { existingName =>
+      if (!existingName.equals(topic))
+        throw new IllegalStateException(s"topic name map already contained ID " +
+          s"$id and new name $topic did not match existing name $existingName")
+    }
+    topicIds.put(topic, id)
+    topicNames.put(id, topic)
   }
 
   def partitionReplicaAssignment(topicPartition: TopicPartition): Seq[Int] = {
@@ -321,6 +343,9 @@ class ControllerContext {
     topicsToBeDeleted -= topic
     topicsWithDeletionStarted -= topic
     allTopics -= topic
+    topicIds.remove(topic).foreach { topicId =>
+      topicNames.remove(topicId)
+    }
     partitionAssignments.remove(topic).foreach { assignments =>
       assignments.keys.foreach { partition =>
         partitionLeadershipInfo.remove(new TopicPartition(topic, partition))

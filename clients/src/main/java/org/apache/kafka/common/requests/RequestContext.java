@@ -22,7 +22,6 @@ import org.apache.kafka.common.network.ClientInformation;
 import org.apache.kafka.common.network.ListenerName;
 import org.apache.kafka.common.network.Send;
 import org.apache.kafka.common.protocol.ApiKeys;
-import org.apache.kafka.common.protocol.types.Struct;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.common.security.auth.KafkaPrincipalSerde;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
@@ -93,9 +92,7 @@ public class RequestContext implements AuthorizableRequestContext {
             ApiKeys apiKey = header.apiKey();
             try {
                 short apiVersion = header.apiVersion();
-                Struct struct = apiKey.parseRequest(apiVersion, buffer);
-                AbstractRequest body = AbstractRequest.parseRequest(apiKey, apiVersion, struct);
-                return new RequestAndSize(body, struct.sizeOf());
+                return AbstractRequest.parseRequest(apiKey, apiVersion, buffer);
             } catch (Throwable ex) {
                 throw new InvalidRequestException("Error getting request for apiKey: " + apiKey +
                         ", apiVersion: " + header.apiVersion() +
@@ -106,9 +103,26 @@ public class RequestContext implements AuthorizableRequestContext {
         }
     }
 
-    public Send buildResponse(AbstractResponse body) {
-        ResponseHeader responseHeader = header.toResponseHeader();
-        return body.toSend(connectionId, responseHeader, apiVersion());
+    /**
+     * Build a {@link Send} for direct transmission of the provided response
+     * over the network.
+     */
+    public Send buildResponseSend(AbstractResponse body) {
+        return body.toSend(header.toResponseHeader(), apiVersion());
+    }
+
+    /**
+     * Serialize a response into a {@link ByteBuffer}. This is used when the response
+     * will be encapsulated in an {@link EnvelopeResponse}. The buffer will contain
+     * both the serialized {@link ResponseHeader} as well as the bytes from the response.
+     * There is no `size` prefix unlike the output from {@link #buildResponseSend(AbstractResponse)}.
+     *
+     * Note that envelope requests are reserved only for APIs which have set the
+     * {@link ApiKeys#forwardable} flag. Notably the `Fetch` API cannot be forwarded,
+     * so we do not lose the benefit of "zero copy" transfers from disk.
+     */
+    public ByteBuffer buildResponseEnvelopePayload(AbstractResponse body) {
+        return body.serializeWithHeader(header.toResponseHeader(), apiVersion());
     }
 
     private boolean isUnsupportedApiVersionsRequest() {

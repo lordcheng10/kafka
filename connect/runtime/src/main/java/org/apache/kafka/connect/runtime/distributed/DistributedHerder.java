@@ -1295,7 +1295,7 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
         final TargetState initialState = configState.targetState(connectorName);
         final Callback<TargetState> onInitialStateChange = (error, newState) -> {
             if (error != null) {
-                callback.onCompletion(new ConnectException("Failed to start connector: " + connectorName), null);
+                callback.onCompletion(new ConnectException("Failed to start connector: " + connectorName, error), null);
                 return;
             }
 
@@ -1365,9 +1365,9 @@ public class DistributedHerder extends AbstractHerder implements Runnable {
                 // from the HTTP request forwarding thread.
                 if (error != null) {
                     if (isPossibleExpiredKeyException(initialRequestTime, error)) {
-                        log.debug("Failed to reconfigure connector's tasks, possibly due to expired session key. Retrying after backoff");
+                        log.debug("Failed to reconfigure connector's tasks ({}), possibly due to expired session key. Retrying after backoff", connName);
                     } else {
-                        log.error("Failed to reconfigure connector's tasks, retrying after backoff:", error);
+                        log.error("Failed to reconfigure connector's tasks ({}), retrying after backoff:", connName, error);
                     }
                     addRequest(RECONFIGURE_CONNECTOR_TASKS_BACKOFF_MS,
                             new Callable<Void>() {

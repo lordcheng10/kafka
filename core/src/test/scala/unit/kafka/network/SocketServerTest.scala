@@ -24,8 +24,9 @@ import java.nio.channels.{SelectionKey, SocketChannel}
 import java.nio.charset.StandardCharsets
 import java.util
 import java.util.concurrent.{CompletableFuture, ConcurrentLinkedQueue, Executors, TimeUnit}
-import java.util.{HashMap, Properties, Random}
+import java.util.{Properties, Random}
 
+import com.fasterxml.jackson.databind.node.{JsonNodeFactory, ObjectNode, TextNode}
 import com.yammer.metrics.core.{Gauge, Meter}
 import javax.net.ssl._
 import kafka.metrics.KafkaYammerMetrics
@@ -33,29 +34,26 @@ import kafka.security.CredentialProvider
 import kafka.server.{KafkaConfig, ThrottledChannel}
 import kafka.utils.Implicits._
 import kafka.utils.TestUtils
-import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.memory.MemoryPool
-import org.apache.kafka.common.message.{SaslAuthenticateRequestData, SaslHandshakeRequestData, VoteRequestData}
+import org.apache.kafka.common.message.{ProduceRequestData, SaslAuthenticateRequestData, SaslHandshakeRequestData, VoteRequestData}
 import org.apache.kafka.common.metrics.Metrics
-import org.apache.kafka.common.network.ClientInformation
 import org.apache.kafka.common.network.KafkaChannel.ChannelMuteState
-import org.apache.kafka.common.network._
+import org.apache.kafka.common.network.{ClientInformation, _}
 import org.apache.kafka.common.protocol.{ApiKeys, Errors}
-import org.apache.kafka.common.record.MemoryRecords
-import org.apache.kafka.common.requests.{AbstractRequest, ApiVersionsRequest, ProduceRequest, RequestHeader, SaslAuthenticateRequest, SaslHandshakeRequest, VoteRequest}
+import org.apache.kafka.common.requests
+import org.apache.kafka.common.requests._
 import org.apache.kafka.common.security.auth.{KafkaPrincipal, SecurityProtocol}
 import org.apache.kafka.common.security.scram.internals.ScramMechanism
-import org.apache.kafka.common.utils.AppInfoParser
-import org.apache.kafka.common.utils.{LogContext, MockTime, Time}
+import org.apache.kafka.common.utils.{AppInfoParser, LogContext, MockTime, Time, Utils}
 import org.apache.kafka.test.{TestSslUtils, TestUtils => JTestUtils}
 import org.apache.log4j.Level
 import org.junit.Assert._
 import org.junit._
 import org.scalatest.Assertions.fail
 
-import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.jdk.CollectionConverters._
 import scala.util.control.ControlThrowable
 
 class SocketServerTest {
@@ -114,11 +112,8 @@ class SocketServerTest {
       outgoing.flush()
   }
 
-  def sendApiRequest(socket: Socket, request: AbstractRequest, header: RequestHeader) = {
-    val byteBuffer = request.serialize(header)
-    byteBuffer.rewind()
-    val serializedBytes = new Array[Byte](byteBuffer.remaining)
-    byteBuffer.get(serializedBytes)
+  def sendApiRequest(socket: Socket, request: AbstractRequest, header: RequestHeader): Unit = {
+    val serializedBytes = Utils.toArray(RequestTestUtils.serializeRequestWithHeader(header, request))
     sendRequest(socket, serializedBytes)
   }
 
@@ -144,11 +139,10 @@ class SocketServerTest {
   }
 
   def processRequest(channel: RequestChannel, request: RequestChannel.Request): Unit = {
-    val byteBuffer = request.body[AbstractRequest].serialize(request.header)
-    byteBuffer.rewind()
-
-    val send = new NetworkSend(request.context.connectionId, byteBuffer)
-    channel.sendResponse(new RequestChannel.SendResponse(request, send, Some(request.header.toString), None))
+    val byteBuffer = RequestTestUtils.serializeRequestWithHeader(request.header, request.body[AbstractRequest])
+    val send = new NetworkSend(request.context.connectionId, ByteBufferSend.sizePrefixed(byteBuffer))
+    val headerLog = RequestConvertToJson.requestHeaderNode(request.header)
+    channel.sendResponse(new RequestChannel.SendResponse(request, send, Some(headerLog), None))
   }
 
   def processRequestNoOpResponse(channel: RequestChannel, request: RequestChannel.Request): Unit = {
@@ -210,25 +204,20 @@ class SocketServerTest {
     val clientId = ""
     val ackTimeoutMs = 10000
 
-    val emptyRequest = ProduceRequest.Builder.forCurrentMagic(ack, ackTimeoutMs,
-      new HashMap[TopicPartition, MemoryRecords]()).build()
+    val emptyRequest = requests.ProduceRequest.forCurrentMagic(new ProduceRequestData()
+      .setTopicData(new ProduceRequestData.TopicProduceDataCollection())
+      .setAcks(ack)
+      .setTimeoutMs(ackTimeoutMs)
+      .setTransactionalId(null))
+      .build()
     val emptyHeader = new RequestHeader(ApiKeys.PRODUCE, emptyRequest.version, clientId, correlationId)
-    val byteBuffer = emptyRequest.serialize(emptyHeader)
-    byteBuffer.rewind()
-
-    val serializedBytes = new Array[Byte](byteBuffer.remaining)
-    byteBuffer.get(serializedBytes)
-    serializedBytes
+    Utils.toArray(RequestTestUtils.serializeRequestWithHeader(emptyHeader, emptyRequest))
   }
 
   private def apiVersionRequestBytes(clientId: String, version: Short): Array[Byte] = {
     val request = new ApiVersionsRequest.Builder().build(version)
     val header = new RequestHeader(ApiKeys.API_VERSIONS, request.version(), clientId, -1)
-    val buffer = request.serialize(header)
-    buffer.rewind()
-    val bytes = new Array[Byte](buffer.remaining())
-    buffer.get(bytes)
-    bytes
+    Utils.toArray(RequestTestUtils.serializeRequestWithHeader(header, request))
   }
 
   @Test
@@ -377,12 +366,9 @@ class SocketServerTest {
     val correlationId = 57
     val header = new RequestHeader(ApiKeys.VOTE, 0, "", correlationId)
     val request = new VoteRequest.Builder(new VoteRequestData()).build()
-    val byteBuffer = request.serialize(header)
-    byteBuffer.rewind()
+    val serializedBytes = Utils.toArray(RequestTestUtils.serializeRequestWithHeader(header, request))
 
     val socket = connect()
-    val serializedBytes = new Array[Byte](byteBuffer.remaining)
-    byteBuffer.get(serializedBytes)
 
     val outgoing = new DataOutputStream(socket.getOutputStream)
     try {
@@ -686,15 +672,16 @@ class SocketServerTest {
     // Mimic a primitive request handler that fetches the request from RequestChannel and place a response with a
     // throttled channel.
     val request = receiveRequest(server.dataPlaneRequestChannel)
-    val byteBuffer = request.body[AbstractRequest].serialize(request.header)
-    val send = new NetworkSend(request.context.connectionId, byteBuffer)
+    val byteBuffer = RequestTestUtils.serializeRequestWithHeader(request.header, request.body[AbstractRequest])
+    val send = new NetworkSend(request.context.connectionId, ByteBufferSend.sizePrefixed(byteBuffer))
     def channelThrottlingCallback(response: RequestChannel.Response): Unit = {
       server.dataPlaneRequestChannel.sendResponse(response)
     }
     val throttledChannel = new ThrottledChannel(request, new MockTime(), 100, channelThrottlingCallback)
+    val headerLog = RequestConvertToJson.requestHeaderNode(request.header)
     val response =
       if (!noOpResponse)
-        new RequestChannel.SendResponse(request, send, Some(request.header.toString), None)
+        new RequestChannel.SendResponse(request, send, Some(headerLog), None)
       else
         new RequestChannel.NoOpResponse(request)
     server.dataPlaneRequestChannel.sendResponse(response)
@@ -783,15 +770,7 @@ class SocketServerTest {
     // then shutdown the server
     shutdownServerAndMetrics(server)
 
-    val largeChunkOfBytes = new Array[Byte](1000000)
-    // doing a subsequent send should throw an exception as the connection should be closed.
-    // send a large chunk of bytes to trigger a socket flush
-    try {
-      sendRequest(plainSocket, largeChunkOfBytes, Some(0))
-      fail("expected exception when writing to closed plain socket")
-    } catch {
-      case _: IOException => // expected
-    }
+    verifyRemoteConnectionClosed(plainSocket)
   }
 
   @Test
@@ -881,6 +860,88 @@ class SocketServerTest {
   }
 
   @Test
+  def testConnectionRatePerIp(): Unit = {
+    val defaultTimeoutMs = 2000
+    val overrideProps = TestUtils.createBrokerConfig(0, TestUtils.MockZkConnect, port = 0)
+    overrideProps.remove(KafkaConfig.MaxConnectionsPerIpProp)
+    overrideProps.put(KafkaConfig.NumQuotaSamplesProp, String.valueOf(2))
+    val connectionRate = 5
+    val time = new MockTime()
+    val overrideServer = new SocketServer(KafkaConfig.fromProps(overrideProps), new Metrics(), time, credentialProvider)
+    // update the connection rate to 5
+    overrideServer.connectionQuotas.updateIpConnectionRateQuota(None, Some(connectionRate))
+    try {
+      overrideServer.startup()
+      // make the (maximum allowable number + 1) of connections
+      (0 to connectionRate).map(_ => connect(overrideServer))
+
+      val acceptors = overrideServer.dataPlaneAcceptors.asScala.values
+      // waiting for 5 connections got accepted and 1 connection got throttled
+      TestUtils.waitUntilTrue(
+        () => acceptors.foldLeft(0)((accumulator, acceptor) => accumulator + acceptor.throttledSockets.size) == 1,
+        "timeout waiting for 1 connection to get throttled",
+        defaultTimeoutMs)
+
+      // now try one more, so that we can make sure this connection will get throttled
+      var conn = connect(overrideServer)
+      // there should be total 2 connection got throttled now
+      TestUtils.waitUntilTrue(
+        () => acceptors.foldLeft(0)((accumulator, acceptor) => accumulator + acceptor.throttledSockets.size) == 2,
+        "timeout waiting for 2 connection to get throttled",
+        defaultTimeoutMs)
+      // advance time to unthrottle connections
+      time.sleep(defaultTimeoutMs)
+      acceptors.foreach(_.wakeup())
+      // make sure there are no connection got throttled now(and the throttled connections should be closed)
+      TestUtils.waitUntilTrue(() => acceptors.forall(_.throttledSockets.isEmpty),
+        "timeout waiting for connection to be unthrottled",
+        defaultTimeoutMs)
+      // verify the connection is closed now
+      verifyRemoteConnectionClosed(conn)
+
+      // new connection should succeed after previous connection closed, and previous samples have been expired
+      conn = connect(overrideServer)
+      val serializedBytes = producerRequestBytes()
+      sendRequest(conn, serializedBytes)
+      val request = overrideServer.dataPlaneRequestChannel.receiveRequest(defaultTimeoutMs)
+      assertNotNull(request)
+    } finally {
+      shutdownServerAndMetrics(overrideServer)
+    }
+  }
+
+  @Test
+  def testThrottledSocketsClosedOnShutdown(): Unit = {
+    val overrideProps = TestUtils.createBrokerConfig(0, TestUtils.MockZkConnect, port = 0)
+    overrideProps.remove("max.connections.per.ip")
+    overrideProps.put(KafkaConfig.NumQuotaSamplesProp, String.valueOf(2))
+    val connectionRate = 5
+    val time = new MockTime()
+    val overrideServer = new SocketServer(KafkaConfig.fromProps(overrideProps), new Metrics(), time, credentialProvider)
+    overrideServer.connectionQuotas.updateIpConnectionRateQuota(None, Some(connectionRate))
+    overrideServer.startup()
+    // make the maximum allowable number of connections
+    (0 until connectionRate).map(_ => connect(overrideServer))
+    // now try one more (should get throttled)
+    val conn = connect(overrideServer)
+    // don't advance time so that connection never gets unthrottled
+    shutdownServerAndMetrics(overrideServer)
+    verifyRemoteConnectionClosed(conn)
+  }
+
+  private def verifyRemoteConnectionClosed(connection: Socket): Unit = {
+    val largeChunkOfBytes = new Array[Byte](1000000)
+    // doing a subsequent send should throw an exception as the connection should be closed.
+    // send a large chunk of bytes to trigger a socket flush
+    try {
+      sendRequest(connection, largeChunkOfBytes, Some(0))
+      fail("expected exception when writing to closed plain socket")
+    } catch {
+      case _: IOException => // expected
+    }
+  }
+
+  @Test
   def testSslSocketServer(): Unit = {
     val serverMetrics = new Metrics
     val overrideServer = new SocketServer(KafkaConfig.fromProps(sslServerProps), serverMetrics, Time.SYSTEM, credentialProvider)
@@ -897,14 +958,14 @@ class SocketServerTest {
       val clientId = ""
       val ackTimeoutMs = 10000
       val ack = 0: Short
-      val emptyRequest = ProduceRequest.Builder.forCurrentMagic(ack, ackTimeoutMs,
-        new HashMap[TopicPartition, MemoryRecords]()).build()
+      val emptyRequest = requests.ProduceRequest.forCurrentMagic(new ProduceRequestData()
+        .setTopicData(new ProduceRequestData.TopicProduceDataCollection())
+        .setAcks(ack)
+        .setTimeoutMs(ackTimeoutMs)
+        .setTransactionalId(null))
+        .build()
       val emptyHeader = new RequestHeader(ApiKeys.PRODUCE, emptyRequest.version, clientId, correlationId)
-
-      val byteBuffer = emptyRequest.serialize(emptyHeader)
-      byteBuffer.rewind()
-      val serializedBytes = new Array[Byte](byteBuffer.remaining)
-      byteBuffer.get(serializedBytes)
+      val serializedBytes = Utils.toArray(RequestTestUtils.serializeRequestWithHeader(emptyHeader, emptyRequest))
 
       sendRequest(sslSocket, serializedBytes)
       processRequest(overrideServer.dataPlaneRequestChannel)
@@ -980,8 +1041,12 @@ class SocketServerTest {
       // ...and now send something to trigger the disconnection
       val ackTimeoutMs = 10000
       val ack = 0: Short
-      val emptyRequest = ProduceRequest.Builder.forCurrentMagic(ack, ackTimeoutMs,
-        new HashMap[TopicPartition, MemoryRecords]()).build()
+      val emptyRequest = requests.ProduceRequest.forCurrentMagic(new ProduceRequestData()
+        .setTopicData(new ProduceRequestData.TopicProduceDataCollection())
+        .setAcks(ack)
+        .setTimeoutMs(ackTimeoutMs)
+        .setTransactionalId(null))
+        .build()
       val emptyHeader = new RequestHeader(ApiKeys.PRODUCE, emptyRequest.version, clientId, correlationId)
       sendApiRequest(socket, emptyRequest, emptyHeader)
       // wait a little bit for the server-side disconnection to occur since it happens asynchronously
@@ -1043,8 +1108,10 @@ class SocketServerTest {
 
       val requestMetrics = channel.metrics(request.header.apiKey.name)
       def totalTimeHistCount(): Long = requestMetrics.totalTimeHist.count
-      val send = new NetworkSend(request.context.connectionId, ByteBuffer.allocate(responseBufferSize))
-      channel.sendResponse(new RequestChannel.SendResponse(request, send, Some("someResponse"), None))
+      val send = new NetworkSend(request.context.connectionId, ByteBufferSend.sizePrefixed(ByteBuffer.allocate(responseBufferSize)))
+      val headerLog = new ObjectNode(JsonNodeFactory.instance)
+      headerLog.set("response", new TextNode("someResponse"))
+      channel.sendResponse(new RequestChannel.SendResponse(request, send, Some(headerLog), None))
 
       val expectedTotalTimeCount = totalTimeHistCount() + 1
       TestUtils.waitUntilTrue(() => totalTimeHistCount() == expectedTotalTimeCount,
@@ -1932,7 +1999,7 @@ class SocketServerTest {
       }
     }
 
-    class CompletedSendsPollData(selector: TestableSelector) extends PollData[Send] {
+    class CompletedSendsPollData(selector: TestableSelector) extends PollData[NetworkSend] {
       override def updateResults(): Unit = {
         val currentSends = update(selector.completedSends.asScala)
         selector.completedSends.clear()
@@ -1989,8 +2056,8 @@ class SocketServerTest {
       }
     }
 
-    override def send(s: Send): Unit = {
-      runOp(SelectorOperation.Send, Some(s.destination)) {
+    override def send(s: NetworkSend): Unit = {
+      runOp(SelectorOperation.Send, Some(s.destinationId)) {
         super.send(s)
       }
     }

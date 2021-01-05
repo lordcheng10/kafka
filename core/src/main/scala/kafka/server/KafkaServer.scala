@@ -50,8 +50,8 @@ import org.apache.kafka.common.{ClusterResource, Endpoint, Node}
 import org.apache.kafka.server.authorizer.Authorizer
 import org.apache.zookeeper.client.ZKClientConfig
 
-import scala.jdk.CollectionConverters._
 import scala.collection.{Map, Seq, mutable}
+import scala.jdk.CollectionConverters._
 
 object KafkaServer {
   // Copy the subset of properties that are relevant to Logs
@@ -170,7 +170,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
 
   var forwardingManager: ForwardingManager = null
 
-  var alterIsrChannelManager: BrokerToControllerChannelManager = null
+  var alterIsrManager: AlterIsrManager = null
 
   var kafkaScheduler: KafkaScheduler = null
 
@@ -309,11 +309,23 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         socketServer.startup(startProcessingRequests = false)
 
         /* start replica manager */
-        alterIsrChannelManager = new BrokerToControllerChannelManagerImpl(
-          metadataCache, time, metrics, config, "alterIsrChannel", threadNamePrefix)
+        alterIsrManager = if (config.interBrokerProtocolVersion.isAlterIsrSupported) {
+          AlterIsrManager(
+            config = config,
+            metadataCache = metadataCache,
+            scheduler = kafkaScheduler,
+            time = time,
+            metrics = metrics,
+            threadNamePrefix = threadNamePrefix,
+            brokerEpochSupplier = () => kafkaController.brokerEpoch
+          )
+        } else {
+          AlterIsrManager(kafkaScheduler, time, zkClient)
+        }
+        alterIsrManager.start()
+
         replicaManager = createReplicaManager(isShuttingDown)
         replicaManager.startup()
-        alterIsrChannelManager.start()
 
         val brokerInfo = createBrokerInfo
         val brokerEpoch = zkClient.registerBroker(brokerInfo)
@@ -330,8 +342,13 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         kafkaController.startup()
 
         if (config.metadataQuorumEnabled) {
-          /* start forwarding manager */
-          forwardingManager = new ForwardingManager(metadataCache, time, metrics, config, threadNamePrefix)
+          forwardingManager = ForwardingManager(
+            config,
+            metadataCache,
+            time,
+            metrics,
+            threadNamePrefix
+          )
           forwardingManager.start()
         }
 
@@ -391,7 +408,8 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         dynamicConfigHandlers = Map[String, ConfigHandler](ConfigType.Topic -> new TopicConfigHandler(logManager, config, quotaManagers, kafkaController),
                                                            ConfigType.Client -> new ClientIdConfigHandler(quotaManagers),
                                                            ConfigType.User -> new UserConfigHandler(quotaManagers, credentialProvider),
-                                                           ConfigType.Broker -> new BrokerConfigHandler(config, quotaManagers))
+                                                           ConfigType.Broker -> new BrokerConfigHandler(config, quotaManagers),
+                                                           ConfigType.Ip -> new IpConfigHandler(socketServer.connectionQuotas))
 
         // Create the config manager. start listening to notifications
         dynamicConfigManager = new DynamicConfigManager(zkClient, dynamicConfigHandlers)
@@ -440,8 +458,6 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
   }
 
   protected def createReplicaManager(isShuttingDown: AtomicBoolean): ReplicaManager = {
-    val alterIsrManager = new AlterIsrManagerImpl(alterIsrChannelManager, kafkaScheduler,
-      time, config.brokerId, () => kafkaController.brokerEpoch)
     new ReplicaManager(config, metrics, time, zkClient, kafkaScheduler, logManager, isShuttingDown, quotaManagers,
       brokerTopicStats, metadataCache, logDirFailureChannel, alterIsrManager)
   }
@@ -722,8 +738,8 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         if (replicaManager != null)
           CoreUtils.swallow(replicaManager.shutdown(), this)
 
-        if (alterIsrChannelManager != null)
-          CoreUtils.swallow(alterIsrChannelManager.shutdown(), this)
+        if (alterIsrManager != null)
+          CoreUtils.swallow(alterIsrManager.shutdown(), this)
 
         if (forwardingManager != null)
           CoreUtils.swallow(forwardingManager.shutdown(), this)
