@@ -1312,6 +1312,9 @@ class KafkaController(val config: KafkaConfig,
             throw new StateChangeFailedException("Leader and isr path written by another controller. This probably " +
               s"means the current controller with epoch $epoch went through a soft failure and another " +
               s"controller was elected with epoch $controllerEpoch. Aborting state change by this controller")
+           /**
+            * leaderAndIsr.newEpochAndZkVersion 这个方法会在原来leaderEpoch的基础上加1
+            * */
           // increment the leader epoch even if there are no leader or isr changes to allow the leader to cache the expanded
           // assigned replica list
           val newLeaderAndIsr = leaderAndIsr.newEpochAndZkVersion

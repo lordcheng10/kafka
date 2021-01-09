@@ -694,6 +694,11 @@ class LogManager(logDirs: Seq[File],
   }
 
   /**
+   * Logmanager管理了两类log：
+   * ①currentLogs 当前对外提供读写的log；
+   * ②futureLogs 正在复制的log，比如把一些replica迁移到该broker的其他磁盘目录
+   * */
+  /**
    * Get the log if it exists, otherwise return None
    *
    * @param topicPartition the partition of the log

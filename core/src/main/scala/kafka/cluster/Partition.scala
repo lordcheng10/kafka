@@ -259,6 +259,9 @@ class Partition(val topicPartition: TopicPartition,
   // completes and a switch to new location is performed.
   // log and futureLog variables defined below are used to capture this
   @volatile var log: Option[Log] = None
+  /**
+   * 当一个broker内部出现磁盘之间的副本迁移时候，就会出现两种类型的log：futurelog 和log
+   * */
   // If ReplicaAlterLogDir command is in progress, this is future location of the log
   @volatile var futureLog: Option[Log] = None
 
@@ -327,6 +330,9 @@ class Partition(val topicPartition: TopicPartition,
     }
   }
 
+  /**
+   * isFutureReplica 这个参数到底代表什么含义
+   * */
   def createLogIfNotExists(isNew: Boolean, isFutureReplica: Boolean, offsetCheckpoints: OffsetCheckpoints): Unit = {
     isFutureReplica match {
       case true if futureLog.isEmpty =>
