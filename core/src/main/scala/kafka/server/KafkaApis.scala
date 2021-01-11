@@ -273,14 +273,32 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleLeaderAndIsrRequest(request: RequestChannel.Request): Unit = {
+    /**
+     * 这段注释是什么意思？
+     * 看这里的大概意思是说客户端需要检查topic是否存在，但是在这里不需要检查。
+     * 但还是没太明白，内部发leader and isr请求肯定不需要检查是否存在啊 ，因为controller控制了topic的生命周期。
+     *
+     * 我理解了：意思就是 客户端在操作topic的时候需要检查topic是否存在，这里不需要，
+     * 因为在删除topic前，controller都会发送leader and isr请求给broker来停止数据对外的读写服务。
+     *
+     * 因此在这里的topic肯定是存在的，不需要检查,topic删除后是不会发送leader and isr请求了.
+     *
+     * 这个注释是在修改topic删除逻辑加的，国章当时review过，当时是修改了客户端直接删除zk目录的方式，
+     * 变为在zk上创建 delete_topic目录，然后又controller触发删除，controller在处理删除的时候，会发送leader and isr请求。
+     * https://github.com/apache/kafka/commit/167acb832d7f104eb2c344dcfd7b914c763d881d90oi
+     * */
     // ensureTopicExists is only for client facing requests
     // We can't have the ensureTopicExists check here since the controller sends it as an advisory to all brokers so they
     // stop serving data to clients for the topic being deleted
     /**
-     * correlationId：关联id
+     * correlationId： 关联id  这个是一早就有的，用来关联request和response的对应关系
      * leaderAndIsrRequest：leader and isr请求.
      * */
     val correlationId = request.header.correlationId
+    /**
+     * 这里是吧leader and isr请求的body转换为LeaderAndIsrRequest对象，那么问题来了为啥调用body就可以转换？
+     * 这里的request和LeaderAndIsrRequest是什么关系？为啥要转换？关于kafka 请求对象格式看来有遗漏的地方?
+     * */
     val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
 
     /**

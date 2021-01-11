@@ -24,6 +24,9 @@ import com.yammer.metrics.reporting.JmxReporter;
 
 import java.util.function.Predicate;
 
+/**
+ * 这个是过滤服务端metric指标的吗？
+ * */
 public class FilteringJmxReporter extends JmxReporter {
 
     private volatile Predicate<MetricName> metricPredicate;
