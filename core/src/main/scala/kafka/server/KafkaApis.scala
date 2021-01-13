@@ -298,6 +298,10 @@ class KafkaApis(val requestChannel: RequestChannel,
     /**
      * 这里是吧leader and isr请求的body转换为LeaderAndIsrRequest对象，那么问题来了为啥调用body就可以转换？
      * 这里的request和LeaderAndIsrRequest是什么关系？为啥要转换？关于kafka 请求对象格式看来有遗漏的地方?
+     *
+     * RequestChannel.Request 对象和LeaderAndIsrRequest实例对象有什么区别和联系?
+     * 这里就涉及到kafka的协议格式了,参考：https://www.iteblog.com/archives/2217.html
+     *
      * */
     val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
 
