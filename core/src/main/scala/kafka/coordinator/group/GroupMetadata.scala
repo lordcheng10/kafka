@@ -33,7 +33,15 @@ import org.apache.kafka.common.utils.Time
 import scala.collection.{Seq, immutable, mutable}
 import scala.jdk.CollectionConverters._
 
+/**
+* ①sealed修饰的trait 和class只能	在当前文件里被继承；
+ * ②如果一个抽象类或trait被sealed修饰，那么在match匹配的时候必须匹配该抽象类或trait的所有实现类，否则编译就会报错。这里用sealed我想主要就是出于这个原因.
+* */
 private[group] sealed trait GroupState {
+  /**
+   * validPreviousStates:拆分下为valid（有效的）  previous（之前的）  states （状态）
+   * 这个变量的意思是保存之前有效的状态，这里返回一个set集合，说明返回的状态有多个，意思是把之前经历过的所有状态都保存下来？不会吧 ，这样没什么意思而且很浪费。
+   * */
   val validPreviousStates: Set[GroupState]
 }
 
@@ -72,6 +80,18 @@ private[group] case object CompletingRebalance extends GroupState {
 }
 
 /**
+ * 首先private[group]这个语法的意思是，该case object仅限于group包下的类文件里面调用.
+ * stable代表稳定的意思，意思是该group处于稳定状态。
+ *
+ * 处于稳定状态的group的行为表现是：
+ * ①正常的给group下的member回复心跳信息。
+ * ②响应当前group下任意member的sync group请求。
+ * ③响应follower的join group请求，这些follower需要具有匹配当前group metadata的metadata；
+ * ④允许member提交offset，这些member是当前group这一代的成员；
+ * ⑤允许fetch offset请求；
+ *
+ *
+ *
  * Group is stable
  *
  * action: respond to member heartbeats normally

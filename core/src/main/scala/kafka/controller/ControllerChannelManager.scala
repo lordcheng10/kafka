@@ -705,9 +705,16 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
          * broker其实是brokerId，从brokerId和epoch的映射中拿到对应的epoch.
          * */
         val brokerEpoch = controllerContext.liveBrokerIdAndEpochs(broker)
-
+        val topicIds = leaderAndIsrPartitionStates.keys
+          .map(_.topic)
+          .toSet[String]
+          .map(topic => (topic, controllerContext.topicIds(topic)))
+          .toMap
+        /**
+         * 这里通过leaders.asJava就把scala的集合转换为java的Collection集合类型
+         * */
         val leaderAndIsrRequestBuilder = new LeaderAndIsrRequest.Builder(leaderAndIsrRequestVersion, controllerId,
-          controllerEpoch, brokerEpoch, leaderAndIsrPartitionStates.values.toBuffer.asJava, leaders.asJava)
+          controllerEpoch, brokerEpoch, leaderAndIsrPartitionStates.values.toBuffer.asJava,topicIds.asJava, leaders.asJava)
 
         /**
          * 这里往broker对应的队列放入一个leaderAndIsr请求并且构建一个回调(该回调方法里，会构建LeaderAndIsr处理事件，并放入controller的事件处理队列)，
@@ -810,19 +817,18 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
      * */
     updateMetadataRequestBrokerSet.intersect(controllerContext.liveOrShuttingDownBrokerIds).foreach { broker =>
       val brokerEpoch = controllerContext.liveBrokerIdAndEpochs(broker)
-
+      val topicIds = partitionStates.map(_.topicName())
+        .distinct
+        .filter(controllerContext.topicIds.contains)
+        .map(topic => (topic, controllerContext.topicIds(topic))).toMap
       val updateMetadataRequestBuilder = new UpdateMetadataRequest.Builder(updateMetadataRequestVersion,
-        controllerId, controllerEpoch, brokerEpoch, partitionStates.asJava, liveBrokers.asJava)
-
-
+        controllerId, controllerEpoch, brokerEpoch, partitionStates.asJava, liveBrokers.asJava, topicIds.asJava)
       sendRequest(broker, updateMetadataRequestBuilder, (r: AbstractResponse) => {
         val updateMetadataResponse = r.asInstanceOf[UpdateMetadataResponse]
         sendEvent(UpdateMetadataResponseReceived(updateMetadataResponse, broker))
       })
 
     }
-
-
     updateMetadataRequestBrokerSet.clear()
     updateMetadataRequestPartitionInfoMap.clear()
   }

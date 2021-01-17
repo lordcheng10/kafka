@@ -893,6 +893,17 @@ class GroupCoordinator(val brokerId: Int,
   private def onGroupLoaded(group: GroupMetadata): Unit = {
     group.inLock {
       info(s"Loading group metadata for ${group.groupId} with generation ${group.generationId}")
+      /**
+       * 如果group状态部署stable，也不为空，那么这里就会抛异常。
+       * assert似乎是断言语法。
+       * 这里使用断言语法，如果给定的条件 group.is(Stable) || group.is(Empty)  为false，那么就会抛异常。
+       * 断言有两种方式：
+       * final def assert(assertion: Boolean, message: => Any)
+       * 和
+       * def assert(assertion: Boolean): Unit
+       *
+       * 上面那种方式在assertion未false的时候，会抛异常并在异常中带有给定的message信息。
+       * */
       assert(group.is(Stable) || group.is(Empty))
       if (groupIsOverCapacity(group)) {
         prepareRebalance(group, s"Freshly-loaded group is over capacity ($groupConfig.groupMaxSize). Rebalacing in order to give a chance for consumers to commit offsets")

@@ -994,6 +994,10 @@ private[kafka] class Processor(val id: Int,
             updateRequestMetrics(response)
             trace("Closing socket connection actively according to the response code.")
             close(channelId)
+
+            /**
+             * 新版本的限速似乎并不是用delay response，而是用mute的方式。具体怎么限速的还得再看看
+             * */
           case _: StartThrottlingResponse =>
             handleChannelMuteEvent(channelId, ChannelMuteEvent.THROTTLE_STARTED)
           case _: EndThrottlingResponse =>

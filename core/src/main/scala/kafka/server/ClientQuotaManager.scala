@@ -198,6 +198,13 @@ class ClientQuotaManager(private val config: ClientQuotaManagerConfig,
   private val staticConfigClientIdQuota = Quota.upperBound(config.quotaDefault.toDouble)
   private val clientQuotaType = QuotaType.toClientQuotaType(quotaType)
 
+  /**
+   * 如果配置了client.quota.callback.class那么就是QuotaTypes.CustomQuotas类型，
+   * 也就相当于开启了限速，只要不是QuotaTypes.NoQuotas类型都是开启了限速。
+   *
+   * 要不开启限速需要client.quota.callback.class不能配置，且quotaDefault为Long.MaxValue
+   * 这里quotaDefault应该是对应的类似quota.window.num这种配置
+   * */
   @volatile
   private var quotaTypesEnabled = clientQuotaCallback match {
     case Some(_) => QuotaTypes.CustomQuotas

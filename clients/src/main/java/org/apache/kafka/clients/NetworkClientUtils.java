@@ -79,6 +79,10 @@ public final class NetworkClientUtils {
         return client.isReady(node, attemptStartTime);
     }
 
+
+    /**
+     * 当客户端关闭前，还有response没收到，那么会抛异常IOException
+     * */
     /**
      * Invokes `client.send` followed by 1 or more `client.poll` invocations until a response is received or a
      * disconnection happens (which can happen for a number of reasons including a request timeout).
@@ -97,6 +101,9 @@ public final class NetworkClientUtils {
                 for (ClientResponse response : responses) {
                     if (response.requestHeader().correlationId() == request.correlationId()) {
                         if (response.wasDisconnected()) {
+                            /**
+                             * 断开链接时，会抛IOException异常
+                             * */
                             throw new IOException("Connection to " + response.destination() + " was disconnected before the response was read");
                         }
                         if (response.versionMismatch() != null) {
@@ -106,8 +113,16 @@ public final class NetworkClientUtils {
                     }
                 }
             }
+            /**
+             * 在运行这个方法过程中，调用了shutdown，这里也会抛异常，因为有response还没接受，
+             * 进入这个方法的while循环，就肯定得等待接受response，因为在此之前发了 request。
+             * */
             throw new IOException("Client was shutdown before response was read");
         } catch (DisconnectException e) {
+            /**
+             * 走到这里，一般是 client.send抛的DisconnetException,此时如果客户端是正处于运行状态，那么久会直接往外抛，
+             * 否则 就跑IOException，因为此时客户端退出的时候，还没有收到对应的response。
+             * */
             if (client.active())
                 throw e;
             else

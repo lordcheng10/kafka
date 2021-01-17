@@ -542,7 +542,8 @@ class GroupMetadataManager(brokerId: Int,
       val startTimeMs = time.milliseconds()
       /**
        * 然后这里才是正在的放到schedule中异步加载，为了防止leader and isr rpc被阻塞。
-       * 这里可以看到每个parition都会单独有个加载任务，或者说这里我们是按照partition维度来提交任务到schedule线程池去执行的
+       * 这里可以看到每个parition都会单独有个加载任务，或者说这里我们是按照partition维度来提交任务到schedule线程池去执行的。
+       * 为啥这里要定期load呢？为啥不调用scheduleOnce呢
        * */
       scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded, startTimeMs))
     } else {
@@ -558,6 +559,11 @@ class GroupMetadataManager(brokerId: Int,
     try {
       val schedulerTimeMs = time.milliseconds() - startTimeMs
       debug(s"Started loading offsets and group metadata from $topicPartition")
+      /**
+       * 这个onGroupLoaded方法很有意思，传递了好几次，都没真正调用。
+       * 在onElection方法中传入    groupManager.scheduleLoadGroupAndOffsets(offsetTopicPartitionId, onGroupLoaded)
+       * 然后传入      scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded, startTimeMs))
+       * */
       doLoadGroupsAndOffsets(topicPartition, onGroupLoaded)
       val endTimeMs = time.milliseconds()
       val totalLoadingTimeMs = endTimeMs - startTimeMs

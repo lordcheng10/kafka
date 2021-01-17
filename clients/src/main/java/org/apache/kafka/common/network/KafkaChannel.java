@@ -81,6 +81,11 @@ public class KafkaChannel implements AutoCloseable {
      *                                                  and a response is currently pending. </li>
      * </ul>
      */
+    /**
+     * 原来如此，限速逻辑现在是通过mute状态来做的。
+     * 相当于把delay response queue取消，然后把delay 的reponse直接放入对应channel中，等待发送。
+     * 好处是减少了一个队列和线程，结构变得更加简单了。
+     * */
     public enum ChannelMuteState {
         NOT_MUTED,
         MUTED,

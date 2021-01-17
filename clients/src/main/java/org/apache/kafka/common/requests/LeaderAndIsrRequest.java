@@ -40,6 +40,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
+ * 从request请求上进行分类，controller相关的请求继承AbstractControlRequest，而AbstractControlRequest是继承自AbstractRequest。
+ * 对于非controller的请求，直接继承AbstractRequest。
+ * 继承AbstactcontrollerRequest的就三个StopReplicaRequest 、UpdateMetadataRequest和LeaderAndIsrRequest
+ * */
 public class LeaderAndIsrRequest extends AbstractControlRequest {
 
     public static class Builder extends AbstractControlRequest.Builder<LeaderAndIsrRequest> {
@@ -59,6 +64,9 @@ public class LeaderAndIsrRequest extends AbstractControlRequest {
 
         @Override
         public LeaderAndIsrRequest build(short version) {
+            /**
+             * 这里java函数式编程非常棒
+             * */
             List<LeaderAndIsrLiveLeader> leaders = liveLeaders.stream().map(n -> new LeaderAndIsrLiveLeader()
                 .setBrokerId(n.id())
                 .setHostName(n.host())

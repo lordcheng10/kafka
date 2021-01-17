@@ -51,6 +51,12 @@ class ClientRequestQuotaManager(private val config: ClientQuotaManagerConfig,
     exemptSensor.record(value)
   }
 
+
+  /**
+   * 这个方法是计算是否要限速，以及限速时间，并更新记录。
+   *
+   * 那么问题来来了，这里判断是否限速的逻辑是啥
+   * */
   /**
     * Records that a user/clientId changed request processing time being throttled. If quota has been violated, return
     * throttle time in milliseconds. Throttle time calculation may be overridden by sub-classes.
@@ -58,6 +64,9 @@ class ClientRequestQuotaManager(private val config: ClientQuotaManagerConfig,
     * @return Number of milliseconds to throttle in case of quota violation. Zero otherwise
     */
   def maybeRecordAndGetThrottleTimeMs(request: RequestChannel.Request, timeMs: Long): Int = {
+    /**
+     * 如果配置了client.quota.callback.class或者配置了quota.window.num ，那么久是开启了
+     * */
     if (quotasEnabled) {
       request.recordNetworkThreadTimeCallback = Some(timeNanos => recordNoThrottle(
         request.session, request.header.clientId, nanosToPercentage(timeNanos)))

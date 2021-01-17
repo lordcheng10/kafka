@@ -302,6 +302,7 @@ class KafkaApis(val requestChannel: RequestChannel,
      * RequestChannel.Request 对象和LeaderAndIsrRequest实例对象有什么区别和联系?
      * 这里就涉及到kafka的协议格式了,参考：https://www.iteblog.com/archives/2217.html
      *
+     * 大致就是 request 分为header和body，body才是类似LeaderAndIsrRequest这种对象
      * */
     val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
 
@@ -316,12 +317,22 @@ class KafkaApis(val requestChannel: RequestChannel,
      * 当然成为leader，也就有成为follower，如果是两个特殊topic的副本成为follower，那么就需要进行卸载操作。
      *
      * 那么问题来了，这两个特殊topic，具体的load和卸载过程是怎样的呢？
+     * 这里传了两个迭代器
      * */
     def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]): Unit = {
+      /**
+       * 对于新的leader或follower，如果是coordinator节点的话（consumer offset leader）都需要处理consumer group的元数据信息（加载或卸载）。
+       * */
       // for each new leader or follower, call coordinator to handle consumer group migration.
       // this callback is invoked under the replica state change lock to ensure proper order of
       // leadership changes
       updatedLeaders.foreach { partition =>
+
+        /***
+         * 如果本次涉及的leader切换是consumer offset这个topic，那么调用 groupCoordinator.onElection，否则调用txnCoordinator.onElectio
+         * groupCoordinator.onElection会启动一个schedule来定期load consumer group元数据信息，那么问题来了，为啥要定期load呢？
+         * load一次不就好了吗，后面用户提交都会修改内存，不是吗？
+         */
         if (partition.topic == GROUP_METADATA_TOPIC_NAME)
           groupCoordinator.onElection(partition.partitionId)
         else if (partition.topic == TRANSACTION_STATE_TOPIC_NAME)
@@ -344,8 +355,8 @@ class KafkaApis(val requestChannel: RequestChannel,
     authorizeClusterOperation(request, CLUSTER_ACTION)
 
     /**
-     * 首先检查请求中的epoch版本号是否正确，如果不正确就会带有STALE_BROKER_EPOCH错误码的reponse，
-     * 否则就回正常的reponse。
+     * 首先检查请求中的epoch版本号是否正确，如果不正确就进入if处理逻辑，返回带有STALE_BROKER_EPOCH错误码的reponse，
+     * 否则就进入else逻辑，返回正常的reponse。
      * */
     if (isBrokerEpochStale(leaderAndIsrRequest.brokerEpoch)) {
       // When the broker restarts very quickly, it is possible for this broker to receive request intended
@@ -358,7 +369,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       sendResponseExemptThrottle(request, leaderAndIsrRequest.getErrorResponse(0, Errors.STALE_BROKER_EPOCH.exception))
     } else {
       /**
-       * replicaManager.becomeLeaderOrFollower 用来生成正常的reponse
+       * replicaManager.becomeLeaderOrFollower 用来生成正常的response
        * */
       val response = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, onLeadershipChange)
       /**
@@ -3462,6 +3473,14 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   private def maybeRecordAndGetThrottleTimeMs(request: RequestChannel.Request): Int = {
     val throttleTimeMs = quotas.request.maybeRecordAndGetThrottleTimeMs(request, time.milliseconds())
+    /**
+     * 这里更新限速时间，然后会在updateRequestMetrics方法中，这一行update metric：
+     * m.throttleTimeHist.update(apiThrottleTimeMs)
+     * 在0.11.0版本中是这样统计限速耗时的：
+     * val apiThrottleTime = nanosToMs(responseCompleteTimeNanos - apiRemoteCompleteTimeNanos)
+     * 这样是有问题得，这个值统计出来大于0并不能说是触发限速了,这个修复是在：
+     * https://github.com/apache/kafka/commit/322b10964ce71eac81da9e574be7dec59c0fc93d
+     * */
     request.apiThrottleTimeMs = throttleTimeMs
     throttleTimeMs
   }
