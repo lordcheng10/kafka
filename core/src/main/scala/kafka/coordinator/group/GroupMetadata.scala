@@ -35,7 +35,9 @@ import scala.jdk.CollectionConverters._
 
 /**
 * ①sealed修饰的trait 和class只能	在当前文件里被继承；
- * ②如果一个抽象类或trait被sealed修饰，那么在match匹配的时候必须匹配该抽象类或trait的所有实现类，否则编译就会报错。这里用sealed我想主要就是出于这个原因.
+ * ②如果一个抽象类或trait被sealed修饰，那么在match匹配的时候必须匹配该抽象类或trait的所有实现类，否则编译就会报错。
+ *
+ * 这里用sealed我想主要就是出于原因②，而它为啥用trait呢，因为如果用class的话  太重了，这里的group状态类不会定义很多方法和字段，所以用一个比较轻量级的trait来作为"基类"。
 * */
 private[group] sealed trait GroupState {
   /**
