@@ -157,8 +157,17 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
   var adminManager: AdminManager = null
   var tokenManager: DelegationTokenManager = null
 
+  /**
+   * 动态配置处理类dynamicConfigHandlers和动态配置管理类dynamicConfigManager
+   * dynamicConfigHandlers会传入dynamicConfigManager
+   *
+   * */
   var dynamicConfigHandlers: Map[String, ConfigHandler] = null
   var dynamicConfigManager: DynamicConfigManager = null
+  /**
+   * credentialProvider是什么玩意?
+   * CredentialProvider 分开看是 Credential（证书）  Provider（提供者），意思是证书提供者。那应该和动态配置没啥关系，我看它和动态配置放得比较近
+   * */
   var credentialProvider: CredentialProvider = null
   var tokenCache: DelegationTokenCache = null
 

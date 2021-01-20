@@ -246,6 +246,10 @@ object TopicCommand extends Logging {
 
   case class AdminClientTopicService private (adminClient: Admin) extends TopicService {
 
+
+    /**
+     * 这里提供的创建topic接口改成了发rpc，这样做的目的是为了收口对topic操作的权限控制。
+     * */
     override def createTopic(topic: CommandTopicPartition): Unit = {
       if (topic.replicationFactor.exists(rf => rf > Short.MaxValue || rf < 1))
         throw new IllegalArgumentException(s"The replication factor must be between 1 and ${Short.MaxValue} inclusive")

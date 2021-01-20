@@ -2803,6 +2803,10 @@ class KafkaApis(val requestChannel: RequestChannel,
     new ApiError(error, null)
   }
 
+  /**
+   *
+   * 这里通过rpc来修改配置，其中似乎就包括日志级别
+   * */
   def handleIncrementalAlterConfigsRequest(request: RequestChannel.Request): Unit = {
     val alterConfigsRequest = request.body[IncrementalAlterConfigsRequest]
 

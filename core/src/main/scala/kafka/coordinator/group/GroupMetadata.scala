@@ -48,6 +48,21 @@ private[group] sealed trait GroupState {
 }
 
 /**
+ * PreparingRebalance: 是指group处于准备rebalance状态.
+ * 处于该状态的group，服务端可以做如下动作：
+ * ①响应心跳，并告诉memeber处于REBALANCE_IN_PROGRESS中；
+ * ②响应sync group，并告诉memeber处于REBALANCE_IN_PROGRESS中；
+ * ③通过leave group请求，把某个member从group移除
+ * ④join请求等待所有memeber的join请求到达
+ * ⑤允许从前一个版本的offset提交;
+ * ⑥允许fetch offset请求；
+ *
+ *
+ * 转换：
+ * ①当一些memeber的join请求在time out之前到来，那么该group就转换为CompletingRebalance状态;
+ * ②当某个group的所有memeber离开后，状态就变为Empty；
+ * ③当某个group由于consumer offset topic对应partiton的leader从该broker切走了那么状态就变为Dead;
+ *
  * Group is preparing to rebalance
  *
  * action: respond to heartbeats with REBALANCE_IN_PROGRESS
@@ -65,6 +80,21 @@ private[group] case object PreparingRebalance extends GroupState {
 }
 
 /**
+ *
+ * PreparingRebalance => CompletingRebalance
+ *
+ *
+ * 收到所有的join group请求后，group状态切换到此状态：group等待从memeber leader那里获取任务分配。
+ *
+ * 处于这个状态的group，可以做如下动作：
+ * ①正常响应心跳，并告知处于REBALANCE_IN_PROGRESS，因为此时还没有进行任务分配；
+ * ②响应offset提交，并告知处于REBALANCE_IN_PROGRESS。
+ * ③等待sync group请求，然后变为Stable状态.
+ * ④允许fetch offset 请求。
+ *
+ * 过度状态：
+ *
+ *
  * Group is awaiting state assignment from the leader
  *
  * action: respond to heartbeats with REBALANCE_IN_PROGRESS
@@ -82,6 +112,10 @@ private[group] case object CompletingRebalance extends GroupState {
 }
 
 /**
+ * PreparingRebalance => CompletingRebalance => Stable
+ * 收到syn group后，group状态从CompletingRebalance切换到 stable状态；
+ *
+ *
  * 首先private[group]这个语法的意思是，该case object仅限于group包下的类文件里面调用.
  * stable代表稳定的意思，意思是该group处于稳定状态。
  *
@@ -92,7 +126,12 @@ private[group] case object CompletingRebalance extends GroupState {
  * ④允许member提交offset，这些member是当前group这一代的成员；
  * ⑤允许fetch offset请求；
  *
- *
+ * 转换动作：
+ * ①通过心跳检测到成员故障，那么该group状态转换为：PreparingRebalance
+ * ②当前成员leave group ，那么group状态会转换为：PreparingRebalance
+ * ③收到leader的join请求，那么状态会转换为：PreparingRebalance  （那么问题来了，为啥会收到leader 的join请求呢？跑得好好的，leader客户端为啥会又发送一个leader请求呢）
+ * ④新memeber加入并且带有新metadata，（带有新metadata 不太理解），那么状态会变为：PreparingRebalance
+ * ⑤group通过consumer offset topic的leader切换从而被移除，那么group状态会变为：Dead
  *
  * Group is stable
  *
@@ -112,6 +151,15 @@ private[group] case object Stable extends GroupState {
 }
 
 /**
+ *  Dead状态代表该组下没有member成员，并且该group的metadata被移除掉。
+ *
+ *  当前状态下，会有如下操作行为：
+ *  对于join请求、sync group请求、leave group请求、heartbeat请求、offset提交请求，回复UNKNOWN_MEMBER_ID（因为此时该组没有成员，也不应该有成员），也就是此状态不能处理这些请求。
+ *  只能处理offset fetch请求
+ *
+ *  转换操作：
+ *  这个状态是group的最终状态了，在group的metadata被清理前，所以该状态没有状态转换了。
+ *
  * Group has no more members and its metadata is being removed
  *
  * action: respond to join group with UNKNOWN_MEMBER_ID
@@ -127,6 +175,20 @@ private[group] case object Dead extends GroupState {
 }
 
 /**
+ * Empty状态意思是没有成员，一直到offset过期。那这里的offset过期和上面Dead说的group metadata有什么区别呢？
+ * 这个状态似乎是代表有一些group只是用来fetch offset的，但没有成员（没法join 请求）
+ *
+ * 这个状态的group可以做的事：
+ * ①正常接收join请求；
+ * ②sync group、heartbeat、leave group和提交offset请求都会报错UNKNOWN_MEMBER_ID，这个状态下该group是没有成员的自然不应该有这些请求。
+ * ③可以接收offset fetch请求；
+ *
+ *  转换操作：
+ *  当最新的offset被移除后，这个状态就切到Dead；
+ *  当有个join 请求加入一个新成员状态就切到 PreparingRebalance；
+ *  当该group对应的consumer offset partition leader发生切换后，该broker上的这个gorup状态就会切刀Dead状态（猜测）;
+ *  group过期被移除就会变为Dead；（过期移除这个动作，部署offset过期删除这个事吗 喔  对了，内存里的group应该也会有个过期删除动作，不然group名就泄漏了）
+ *
   * Group has no more members, but lingers until all offsets have expired. This state
   * also represents groups which use Kafka only for offset commits and have no members.
   *

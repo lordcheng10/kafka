@@ -35,6 +35,23 @@ trait NotificationHandler {
   def processNotification(notificationMessage: Array[Byte]): Unit
 }
 
+
+/**
+ * ZkNodeChangeNotificationListener的调用逻辑：
+ * ①init()注册监听器：
+ * zkClient.registerStateChangeHandler(ZkStateChangeHandler)
+ * zkClient.registerZNodeChildChangeHandler(ChangeNotificationHandler)
+ * ②触发监听器，调用ZkStateChangeHandler.afterInitializingSession()和ChangeNotificationHandler.handleChildChange();
+ * ③afterInitializingSession和handleChildChange方法都调用addChangeNotification();
+ * ④addChangeNotification()方法中会new ChangeNotification放入queue队列中；
+ * ⑤ChangeEventProcessThread线程会从队列中取出ChangeNotification对象，然后调用ChangeNotification.process
+ * ⑥ChangeNotification.process() 方法会调用processNotifications()方法;
+ * ⑦processNotifications()方法会调用processNotification() ，注意这里不是同一个方法，后面的那个没有s；
+ * ⑧processNotification()会调用ConfigChangedNotificationHandler.processNotification()方法;
+ * ⑨ConfigChangedNotificationHandler.processNotification()方法中会调用processEntityConfigChangeVersion1或者processEntityConfigChangeVersion2方法（根据版本号）；
+ * 10.processEntityConfigChangeVersion1或processEntityConfigChangeVersion2会调用对应ConfigHandler（对应实现类有TopicConfigHandler、QuotaConfigHandler等）的processConfigChanges方法来处理：
+ * configHandlers(entityType).processConfigChanges(entity, entityConfig)
+ * */
 /**
  * A listener that subscribes to seqNodeRoot for any child changes where all children are assumed to be sequence node
  * with seqNodePrefix. When a child is added under seqNodeRoot this class gets notified, it looks at lastExecutedChange
@@ -61,6 +78,12 @@ class ZkNodeChangeNotificationListener(private val zkClient: KafkaZkClient,
   private val isClosed = new AtomicBoolean(false)
 
   def init(): Unit = {
+    /**
+     * 这里注册对应的监听方法，这两个方法ZkStateChangeHandler和ChangeNotificationHandler实际都是在触发后，调用addChangeNotification方法，
+     * 而addChangeNotification方法实际是构建一个事件（实际就是ChangeNotification类对象）放入queue队列中，然后由ChangeEventProcessThread线程来处理，
+     * 这个线程会从队列中取出事件，然后调用事件的process方法（实际就是调用ChangeNotification.process），然后在process中会调用processNotifications()方法,
+     *
+     * */
     zkClient.registerStateChangeHandler(ZkStateChangeHandler)
     zkClient.registerZNodeChildChangeHandler(ChangeNotificationHandler)
     addChangeNotification()

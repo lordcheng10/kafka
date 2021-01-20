@@ -133,6 +133,11 @@ class AdminManager(val config: KafkaConfig,
     }
   }
 
+
+  /**
+   * 这里把topic创建收口到服务端（通过rpc），由服务端来写zk，主要的目的是为了收口做鉴权。
+   * 老的创建topic的客户端是直接写zk，这种方式不太好做topic的权限控制。
+   * */
   /**
     * Create topics and wait until the topics have been completely created.
     * The callback function will be triggered either when timeout, error or the topics are created.
@@ -529,6 +534,10 @@ class AdminManager(val config: KafkaConfig,
     resource -> ApiError.NONE
   }
 
+
+  /**
+   * 这里看起来在动态修改日志级别。通过rpc调用
+   * */
   private def alterLogLevelConfigs(alterConfigOps: Seq[AlterConfigOp]): Unit = {
     alterConfigOps.foreach { alterConfigOp =>
       val loggerName = alterConfigOp.configEntry().name()
@@ -596,6 +605,10 @@ class AdminManager(val config: KafkaConfig,
             prepareIncrementalConfigs(alterConfigOps, configProps, KafkaConfig.configKeys)
             alterBrokerConfigs(resource, validateOnly, configProps, configEntriesMap)
 
+
+            /**
+             * 似乎这里动态修改日志级别了
+             * */
           case ConfigResource.Type.BROKER_LOGGER =>
             getBrokerId(resource)
             validateLogLevelConfigs(alterConfigOps)

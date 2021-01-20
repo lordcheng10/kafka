@@ -30,6 +30,10 @@ import org.apache.kafka.common.utils.Time
 import scala.jdk.CollectionConverters._
 import scala.collection._
 
+
+/**
+ * ConfigType代表有哪些config类型。
+ * */
 /**
  * Represents all the entities that can be configured via ZK
  */
@@ -86,6 +90,16 @@ object ConfigEntityName {
  */
 /**
  * kafka动态配置管理模块
+ * configHandlers是传进来的，在KafkaServer启动的时候就填入了config处理类：
+ * /* start dynamic config manager */
+ * dynamicConfigHandlers = Map[String, ConfigHandler](ConfigType.Topic -> new TopicConfigHandler(logManager, config, quotaManagers, kafkaController),
+ * ConfigType.Client -> new ClientIdConfigHandler(quotaManagers),
+ * ConfigType.User -> new UserConfigHandler(quotaManagers, credentialProvider),
+ * ConfigType.Broker -> new BrokerConfigHandler(config, quotaManagers),
+ * ConfigType.Ip -> new IpConfigHandler(socketServer.connectionQuotas))
+ *
+ * 在这些handle里面定义了如何更新配置
+ *
  * */
 class DynamicConfigManager(private val zkClient: KafkaZkClient,
                            private val configHandlers: Map[String, ConfigHandler],
@@ -93,6 +107,10 @@ class DynamicConfigManager(private val zkClient: KafkaZkClient,
                            private val time: Time = Time.SYSTEM) extends Logging {
   val adminZkClient = new AdminZkClient(zkClient)
 
+  /**
+   * ConfigChangedNotificationHandler和configChangeListener是用于发现配置变更的。
+   * ConfigChangedNotificationHandler往configChangeListener注册，从而可以进行发现处理
+   * */
   object ConfigChangedNotificationHandler extends NotificationHandler {
     override def processNotification(jsonBytes: Array[Byte]) = {
       // Ignore non-json notifications because they can be from the deprecated TopicConfigManager
@@ -163,8 +181,15 @@ class DynamicConfigManager(private val zkClient: KafkaZkClient,
    * Begin watching for config changes
    */
   def startup(): Unit = {
+    /**
+     * 这里会注册对应的listerner来触发
+     * */
     configChangeListener.init()
 
+
+    /**
+     * 启动的时候，会全部调用下注册的handler，这样才能把zk的配置覆盖配置文件里的。
+     * */
     // Apply all existing client/user configs to the ClientIdConfigHandler/UserConfigHandler to bootstrap the overrides
     configHandlers.foreach {
       case (ConfigType.User, handler) =>

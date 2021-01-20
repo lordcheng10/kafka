@@ -543,7 +543,10 @@ class GroupMetadataManager(brokerId: Int,
       /**
        * 然后这里才是正在的放到schedule中异步加载，为了防止leader and isr rpc被阻塞。
        * 这里可以看到每个parition都会单独有个加载任务，或者说这里我们是按照partition维度来提交任务到schedule线程池去执行的。
-       * 为啥这里要定期load呢？为啥不调用scheduleOnce呢
+       * 为啥这里要定期load呢？为啥不调用scheduleOnce呢?
+       * 很奇怪的是，明明调用的是def schedule(name: String, fun: () => Unit, delay: Long, period: Long, unit: TimeUnit): ScheduledFuture[_] ，
+       * 入参有4个，而且都没有默认值，那么为啥这里只传入了两个呢
+       *
        * */
       scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded, startTimeMs))
     } else {

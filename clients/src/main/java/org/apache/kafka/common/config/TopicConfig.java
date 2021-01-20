@@ -94,6 +94,11 @@ public class TopicConfig {
     public static final String FILE_DELETE_DELAY_MS_DOC = "The time to wait before deleting a file from the " +
         "filesystem";
 
+    /**
+     * 这个配置是用于topic compaction删除的配置。
+     * 那么和KafkaConfig中的log.cleaner.delete.retention.ms区别是啥呢  ？
+     * 我理解都是同一个配置，一个是机器默认配置，一个是topic配置.这两个配置最终都拷贝到LogConfig中去覆盖。
+     * */
     public static final String DELETE_RETENTION_MS_CONFIG = "delete.retention.ms";
     public static final String DELETE_RETENTION_MS_DOC = "The amount of time to retain delete tombstone markers " +
         "for <a href=\"#compaction\">log compacted</a> topics. This setting also gives a bound " +

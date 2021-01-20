@@ -65,6 +65,12 @@ class TopicConfigHandler(private val logManager: LogManager, kafkaConfig: KafkaC
         if (!configNamesToExclude.contains(key)) props.put(key, value)
       }
       val logConfig = LogConfig.fromProps(logManager.currentDefaultConfig.originals, props)
+      /**
+       * topic的config是通过logManager找到logs，然后找到对应的logConfig来进行更新logconfig配置，topic配置到最终都是log配置。
+       * 似乎所有的配置 最终只要两个 logconfig和brokerconfig，至于topicconfig最终都是赋值给logconfig。喔 ，并不是只有这两个配置，还有很多其他配置，
+       * 应该不是所有的配置最终都转换为logconfig和brokerconfig了。动态配置除了这里外，居然还有通过rpc方式修改的一些配置（这个rpc：INCREMENTAL_ALTER_CONFIGS），
+       * 那么这两种动态修改方式的区别是啥，似乎修改的是不同的配置，或者说是无法写到zk上的配置。
+       * */
       logs.foreach(_.updateConfig(logConfig))
     }
   }

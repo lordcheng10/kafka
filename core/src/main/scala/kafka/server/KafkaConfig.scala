@@ -1327,6 +1327,30 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
   def this(props: java.util.Map[_, _], doLog: Boolean) = this(props, doLog, None)
   // Cache the current config to avoid acquiring read lock to access from dynamicConfig
   @volatile private var currentConfig = this
+  /**
+   * DynamicConfigManager中通过这里的dynamicConfig变量来更新配置:
+   * class BrokerConfigHandler(private val brokerConfig: KafkaConfig,
+   * private val quotaManagers: QuotaManagers) extends ConfigHandler with Logging {
+   *
+   * def processConfigChanges(brokerId: String, properties: Properties): Unit = {
+   * def getOrDefault(prop: String): Long = {
+   * if (properties.containsKey(prop))
+   * properties.getProperty(prop).toLong
+   * else
+   * DefaultReplicationThrottledRate
+   * }
+   * if (brokerId == ConfigEntityName.Default)
+   * brokerConfig.dynamicConfig.updateDefaultConfig(properties)
+   * else if (brokerConfig.brokerId == brokerId.trim.toInt) {
+   * brokerConfig.dynamicConfig.updateBrokerConfig(brokerConfig.brokerId, properties)
+   * quotaManagers.leader.updateQuota(upperBound(getOrDefault(LeaderReplicationThrottledRateProp).toDouble))
+   * quotaManagers.follower.updateQuota(upperBound(getOrDefault(FollowerReplicationThrottledRateProp).toDouble))
+   * quotaManagers.alterLogDirs.updateQuota(upperBound(getOrDefault(ReplicaAlterLogDirsIoMaxBytesPerSecondProp).toDouble))
+   * }
+   * }
+   * }
+   *
+   * */
   private[server] val dynamicConfig = dynamicConfigOverride.getOrElse(new DynamicBrokerConfig(this))
 
   private[server] def updateCurrentConfig(newConfig: KafkaConfig): Unit = {
