@@ -389,6 +389,9 @@ object ConfigEntityZNode {
   }
 }
 
+/**
+ * config change目录: /config/changes，先写这个目录，再更新配置删除
+ * */
 object ConfigEntityChangeNotificationZNode {
   def path = s"${ConfigZNode.path}/changes"
 }

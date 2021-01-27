@@ -317,7 +317,14 @@ class KafkaApis(val requestChannel: RequestChannel,
      * 当然成为leader，也就有成为follower，如果是两个特殊topic的副本成为follower，那么就需要进行卸载操作。
      *
      * 那么问题来了，这两个特殊topic，具体的load和卸载过程是怎样的呢？
-     * 这里传了两个迭代器
+     * 这里传了两个迭代器，scala的迭代器到底是什么原理？
+     * 这里使用的Iterable实际是：
+     * type Iterable[+A] = scala.collection.Iterable[A]
+     *
+     * scala用了type定义了一个类型，实际构建的是scala.collection.Iterable类对象，关于scala的type关键字，参考：http://note.youdao.com/s/1Fh9D3xT
+     *
+     *
+     * onLeadershipChange : 这个命名可以拆开 on leader  ship  change  领导阶层改变中。
      * */
     def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]): Unit = {
       /**
@@ -497,12 +504,34 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   /**
+   *
+   * 我们用ConsumerGroupCommand来进行reset offset的时候，似乎是通过rpc 提交给broker服务端，然后由服务端来进行reset offset。
+   * 这样做的目的是为了更好的做权限控制。那么对于old consumer也是如此吗  让broker来修改zk？
+   * 看起来是支持rpc 让broker修改zk的offset的，而且0.11.0版本也支持。那为什么我用命令来重置的时候，似乎并未改zk上的offset，而是把offset提交到broker了？
+   * 喔，明白了，肯定是提交到broker啊，因为你执行的是这个命令：
+   * ./kafka-consumer-groups.sh --bootstrap-server dt-wp4-kafka01:6667  --group MIRROR-mirror_qcsh5_prod1-rec-session1-qcsh4-kafka-2.5-test  --reset-offsets  --to-latest --topic  raw-tracker --execute
+   * 这个命令发送rpc到broker后，broker并未去检查这个group在zk上是否有，从而来判断它是old 还是new consumer，而是简单的根据rpc请求的apiVersion==0来判断的，我们用的0.11.0版本apiVersion肯定不是0，所以并未走到修改zk的逻辑上。
+   * 但我如果用0.10.0版本，又没有这个工具了。当然这个rpc本身不是专门为reset offset工具使用的，它最初是程序运行过程中，客户端提交offset时，根据客户端apiVersion来判断offset存储位置。
+   * 但是有个问题：同名的groupId如果分别用old和new ，那相当于两个group。个人觉得，这里提交offset到哪里，是否应该看下这个group是否在zk上存在，如果存在，就提交到zk上，这样group全局唯一。
+   * TODO-chenlin  这个感觉可以提个patch，同名groupId，由于offset存储到不同地方，导致变成两个gorupId了，对用户带来疑惑。
+   *
+   * TODO-chenlin 或者工具侧，可以做一个专门针对old consumer的reset 逻辑：客户端直接修改zk  这里似乎也可以提个patch。关于这个社区应该不喜欢，因为以前客户端命令就有专门对old consumer操作的类，但后面直接废弃干掉了，所以社区的规划是不想客户端来操作zk，为了做权限控制：
+   *
+   * @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
+   * class ZkConsumerGroupService(val opts: ConsumerGroupCommandOptions) extends ConsumerGroupService
+   *
    * Handle an offset commit request
    */
   def handleOffsetCommitRequest(request: RequestChannel.Request): Unit = {
+    /**
+     * 获取header和构建OffsetCommitRequest对象。
+     * */
     val header = request.header
     val offsetCommitRequest = request.body[OffsetCommitRequest]
 
+    /**
+     * 鉴权
+     * */
     val unauthorizedTopicErrors = mutable.Map[TopicPartition, Errors]()
     val nonExistingTopicErrors = mutable.Map[TopicPartition, Errors]()
     // the callback for sending an offset commit response
@@ -519,8 +548,14 @@ class KafkaApis(val requestChannel: RequestChannel,
         new OffsetCommitResponse(requestThrottleMs, combinedCommitStatus.asJava))
     }
 
+    /**
+     * 检查该group是否有offset提交权限。
+     * */
     // reject the request if not authorized to the group
     if (!authorize(request.context, READ, GROUP, offsetCommitRequest.data.groupId)) {
+      /**
+       * 如果没有权限，那么就进入到这里。
+       * */
       val error = Errors.GROUP_AUTHORIZATION_FAILED
       val responseTopicList = OffsetCommitRequest.getErrorResponseTopics(
         offsetCommitRequest.data.topics,
@@ -532,6 +567,12 @@ class KafkaApis(val requestChannel: RequestChannel,
             .setThrottleTimeMs(requestThrottleMs)
       ))
     } else if (offsetCommitRequest.data.groupInstanceId != null && config.interBrokerProtocolVersion < KAFKA_2_3_IV0) {
+      /**
+       * 如果有权限，并且该groupInstanceId不为null（我靠，groupInstanceId又是一个什么概念，代表什么意思），
+       * 并且该broker上的kafka协议版本号小于KAFKA_2_3_IV0（这里的 config.interBrokerProtocolVersion具体又是什么意思），那么就进入到这里。
+       *
+       * 看下面的注释逻辑：为什么要检查broker的内部协议版本号是大于2.3的，因为只有2.3才支持静态member功能（这个功能我理解是该group下的member是固定的）
+       * */
       // Only enable static membership when IBP >= 2.3, because it is not safe for the broker to use the static member logic
       // until we are sure that all brokers support it. If static group being loaded by an older coordinator, it will discard
       // the group.instance.id field, so static members could accidentally become "dynamic", which leads to wrong states.
@@ -544,8 +585,14 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
       sendResponseCallback(errorMap.toMap)
     } else {
+      /**
+       * 大部分应该进入到这里
+       * */
       val authorizedTopicRequestInfoBldr = immutable.Map.newBuilder[TopicPartition, OffsetCommitRequestData.OffsetCommitRequestPartition]
 
+      /**
+       * 这里看起来还在做鉴权，之前不是做了吗
+       * */
       val topics = offsetCommitRequest.data.topics.asScala
       val authorizedTopics = filterByAuthorized(request.context, READ, TOPIC, topics)(_.name)
       for (topicData <- topics) {
@@ -565,6 +612,10 @@ class KafkaApis(val requestChannel: RequestChannel,
       if (authorizedTopicRequestInfo.isEmpty)
         sendResponseCallback(Map.empty)
       else if (header.apiVersion == 0) {
+        /**
+         * 这里才是实际存储offset的逻辑。这里主要是针对apiVersion为0的，也就是offset存储到zk上的版本。这些老版本的存储逻辑。
+         * 那我理解，如果我在客户端用ConsumerGroupCommand命令来reset old consumer的话，也是可以的，客户端发送rpc到broker，然后broker通过判断apiversion从而reset zk。
+         * */
         // for version 0 always store offsets to ZK
         val responseInfo = authorizedTopicRequestInfo.map {
           case (topicPartition, partitionData) =>
@@ -585,6 +636,9 @@ class KafkaApis(val requestChannel: RequestChannel,
         }
         sendResponseCallback(responseInfo)
       } else {
+        /**
+         * 这里是针对new consumer  提交offset的处理
+         * */
         // for version 1 and beyond store offsets in offset manager
 
         // "default" expiration timestamp is now + retention (and retention may be overridden if v2)

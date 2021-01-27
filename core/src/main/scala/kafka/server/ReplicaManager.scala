@@ -1435,6 +1435,8 @@ class ReplicaManager(val config: KafkaConfig,
 
           /**
            * 这里会做实际的leader变更操作，返回变成leader 的partition集合.
+           *
+           * 这里返回的是一个迭代器类型，那么迭代器是怎么构建出来的 ？原理是什么？
            * */
           val partitionsBecomeLeader = if (partitionsToBeLeader.nonEmpty)
             makeLeaders(controllerId, controllerEpoch, partitionsToBeLeader, correlationId, responseMap,

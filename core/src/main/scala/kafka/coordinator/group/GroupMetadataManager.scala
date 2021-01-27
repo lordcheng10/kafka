@@ -545,7 +545,12 @@ class GroupMetadataManager(brokerId: Int,
        * 这里可以看到每个parition都会单独有个加载任务，或者说这里我们是按照partition维度来提交任务到schedule线程池去执行的。
        * 为啥这里要定期load呢？为啥不调用scheduleOnce呢?
        * 很奇怪的是，明明调用的是def schedule(name: String, fun: () => Unit, delay: Long, period: Long, unit: TimeUnit): ScheduledFuture[_] ，
-       * 入参有4个，而且都没有默认值，那么为啥这里只传入了两个呢
+       * 入参有4个，而且都没有默认值，那么为啥这里只传入了两个呢?
+       *
+       * 我知道了，因为在trait Scheduler中的schedule接口中后三个参数给定的默认值的，所以如果不传后面几个就用的trait的接口中的默认值：
+       * def schedule(name: String, fun: ()=>Unit, delay: Long = 0, period: Long = -1, unit: TimeUnit = TimeUnit.MILLISECONDS) : ScheduledFuture[_]
+       *
+       * 这个默认值就代表只允许一次，那么这就说得通了，group只需要加载一次，而不是一直加载。那么还有个问题，它这样写是为啥呢？单纯炫技吗  这样写没看到好处，反而给阅读带来难度。
        *
        * */
       scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded, startTimeMs))

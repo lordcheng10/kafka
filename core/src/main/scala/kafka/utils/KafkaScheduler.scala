@@ -44,7 +44,12 @@ trait Scheduler {
    * Check if the scheduler has been started
    */
   def isStarted: Boolean
-  
+
+
+  /**
+   * 注意这里的桀纣后面三个参数给定了默认值，继承类如果继承这个接口方法，后面三个参数可以不用传，那就是用默认值。
+   * 那么问题来了，这里为啥要这么设计，这样会为阅读代码带来疑惑，但没看到有好处。
+   * */
   /**
    * Schedule a task
    * @param name The name of this task
@@ -99,10 +104,22 @@ class KafkaScheduler(val threads: Int,
     }
   }
 
+  /**
+   * 发现这个方法根本没有使用。
+   * */
   def scheduleOnce(name: String, fun: () => Unit): Unit = {
     schedule(name, fun, delay = 0L, period = -1L, unit = TimeUnit.MILLISECONDS)
   }
 
+  /**
+   *
+   * 这里后面三个参数可以不用传，当不传时，就用的继承trait方法中后面三个参数带着的默认值，这个默认值就代表只允许一次：
+   * def schedule(name: String, fun: ()=>Unit, delay: Long = 0, period: Long = -1, unit: TimeUnit = TimeUnit.MILLISECONDS) : ScheduledFuture[_]
+   *
+   * 还有个问题哈，为啥有些方法继承加override，而这里不加？加不加到底是怎么考虑的。可以参考这里的讨论：https://blog.csdn.net/ZJ__ZFH/article/details/86578174
+   * 特质的继承类，在覆盖特质方法的时候，可以不需要加override。但类继承的方法必须要加，不然会报错。
+   *
+   * */
   def schedule(name: String, fun: () => Unit, delay: Long, period: Long, unit: TimeUnit): ScheduledFuture[_] = {
     debug("Scheduling task %s with initial delay %d ms and period %d ms."
         .format(name, TimeUnit.MILLISECONDS.convert(delay, unit), TimeUnit.MILLISECONDS.convert(period, unit)))

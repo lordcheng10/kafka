@@ -109,7 +109,11 @@ class DynamicConfigManager(private val zkClient: KafkaZkClient,
 
   /**
    * ConfigChangedNotificationHandler和configChangeListener是用于发现配置变更的。
-   * ConfigChangedNotificationHandler往configChangeListener注册，从而可以进行发现处理
+   * ConfigChangedNotificationHandler往configChangeListener注册，从而可以进行发现处理.
+   *
+   * 客户端写到/config/changes目录下，具体的目录结构，eg: /config/changes/config_change_13321，内容格式：
+   * {"version" : 1, "entity_type":"topic/client", "entity_name" : "topic_name/client_id"}
+   *
    * */
   object ConfigChangedNotificationHandler extends NotificationHandler {
     override def processNotification(jsonBytes: Array[Byte]) = {
