@@ -2999,6 +2999,25 @@ case class ReplicaLeaderElection(
   override def state: ControllerState = ControllerState.ManualLeaderBalance
 
   override def preempt(): Unit = callback(
+    /**
+     * 这里的Option.fold是什么意思呢？这里fold方法的定义是：
+     *
+     * @inline final def fold[B](ifEmpty: => B)(f: A => B): B =
+     *         if (isEmpty) ifEmpty else f(this.get)
+     *
+     *  很明显用了柯力化。
+     *
+     *  后面的大括号实际是一个函数参数，对应fold方法定义的f:A=>B，其中partitions实际是f的入参A。那么这个方法的含义就是：
+     *
+     *  如果该Option类为空，那么就返回一个Map.empty[TopicPartition, Either[ApiError, Int]]，否则就返回f函数的返回值。
+     *
+     *  其实ifEmpty: => B也是一个函数参数，只不过该函数参数的入参为空，也可以这样定义：ifEmpty: ()=> B
+     *
+     *  这里的callback类型是：  type ElectLeadersCallback = Map[TopicPartition, Either[ApiError, Int]] => Unit
+     *  下面的这三行代码实际就是构造一个map，然后作为入参传入callback里。
+     *  partitionsFromAdminClientOpt.fold(Map.empty[TopicPartition, Either[ApiError, Int]]) { partitions =>  partitions.iterator.map(partition => partition -> Left(new ApiError(Errors.NOT_CONTROLLER, null))).toMap }
+     *
+     * */
     partitionsFromAdminClientOpt.fold(Map.empty[TopicPartition, Either[ApiError, Int]]) { partitions =>
       partitions.iterator.map(partition => partition -> Left(new ApiError(Errors.NOT_CONTROLLER, null))).toMap
     }

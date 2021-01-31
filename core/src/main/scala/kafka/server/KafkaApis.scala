@@ -322,17 +322,28 @@ class KafkaApis(val requestChannel: RequestChannel,
      * type Iterable[+A] = scala.collection.Iterable[A]
      *
      * scala用了type定义了一个类型，实际构建的是scala.collection.Iterable类对象，关于scala的type关键字，参考：http://note.youdao.com/s/1Fh9D3xT
-     *
-     *
      * onLeadershipChange : 这个命名可以拆开 on leader  ship  change  领导阶层改变中。
+     *
+     * 这里为啥要用Iterable作为方法传入参数类型呢？
+     * 实际传入的参数类型是Set类型，而Set又继承了scala.collection.Iterable，scala.collection.Iterable的别名是Iterable。
+     * 然后在方法内部使用，也只使用了foreach方法，这个方法是从scala.collection.IterableOnceOps#foreach(scala.Function1)继承来的。
+     * 那么为什么这里的方法传入参数类型不用Set类型呢？只是为了装逼吗
+     * 这里的继承关系：
+     * Iterable 别名->scala.collection.Iterable 继承->IterableOnce
+     * Set继承->scala.collection.Iterable
+     *
      * */
     def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]): Unit = {
       /**
        * 对于新的leader或follower，如果是coordinator节点的话（consumer offset leader）都需要处理consumer group的元数据信息（加载或卸载）。
+       *
+       * 下面的注释怎么理解？
+       * 对于每一个新的领导或跟随者，呼叫协调人员处理消费群体迁移。这个回调函数在replica状态更改锁下调用，以确保领导权更改的正确顺序
+       *
+       * 似乎在当前broker中的group metadata卸载和加载过程和leader切换过程需要有顺序保证
        * */
       // for each new leader or follower, call coordinator to handle consumer group migration.
-      // this callback is invoked under the replica state change lock to ensure proper order of
-      // leadership changes
+      // this callback is invoked under the replica state change lock to ensure proper order of leadership changes
       updatedLeaders.foreach { partition =>
 
         /***
@@ -517,6 +528,7 @@ class KafkaApis(val requestChannel: RequestChannel,
    *
    * TODO-chenlin 或者工具侧，可以做一个专门针对old consumer的reset 逻辑：客户端直接修改zk  这里似乎也可以提个patch。关于这个社区应该不喜欢，因为以前客户端命令就有专门对old consumer操作的类，但后面直接废弃干掉了，所以社区的规划是不想客户端来操作zk，为了做权限控制：
    *
+   * TODO-chenlin  这个rpc可以改下：请求中增加一个提交选项，让用户指定offset存储到zk或者broker，为了兼容老的，如果不指定，就按照之前的选择规则（通过apiVersion版本号来自动判断）
    * @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
    * class ZkConsumerGroupService(val opts: ConsumerGroupCommandOptions) extends ConsumerGroupService
    *
