@@ -271,6 +271,11 @@ class KafkaController(val config: KafkaConfig,
     onReplicaElection(pendingPreferredReplicaElections, ElectionType.PREFERRED, ZkTriggered)
     info("Starting the controller scheduler")
     kafkaScheduler.startup()
+    /**
+     * 如果开启了自动prefer leader的话，那么controller在初始化的时候，
+     * 就会开启一个scheduler线程来定期放入一个AutoPreferredReplicaLeaderElection事件到eventManager中，这个周期是写死的5秒。
+     * 注意这里没有传period: Long参数，因此只会调用一次。但是这里设计很巧妙，每次执行完 又会放一个AutoPreferredReplicaLeaderElection事件进去，也就是再调用一次scheduleAutoLeaderRebalanceTask方法。
+     * */
     if (config.autoLeaderRebalanceEnable) {
       scheduleAutoLeaderRebalanceTask(delay = 5, unit = TimeUnit.SECONDS)
     }
@@ -958,6 +963,9 @@ class KafkaController(val config: KafkaConfig,
   ): Map[TopicPartition, Either[Throwable, LeaderAndIsr]] = {
     info(s"Starting replica leader election ($electionType) for partitions ${partitions.mkString(",")} triggered by $electionTrigger")
     try {
+      /**
+       * 选举类型只有两类：PREFERRED和UNCLEAN ，UNCLEAN应该知道，就是选举isr外面的，也就是脏选。
+       * */
       val strategy = electionType match {
         case ElectionType.PREFERRED => PreferredReplicaPartitionLeaderElectionStrategy
         case ElectionType.UNCLEAN =>
@@ -967,11 +975,18 @@ class KafkaController(val config: KafkaConfig,
           OfflinePartitionLeaderElectionStrategy(allowUnclean = electionTrigger == AdminClientTriggered)
       }
 
+      /**
+       * 然后这里根据对应的选举类型做相应的处理。这里居然让partition状态机来处理。也合理，因为leader选举也确实是属于partition状态。
+       * */
       val results = partitionStateMachine.handleStateChanges(
         partitions.toSeq,
         OnlinePartition,
         Some(strategy)
       )
+
+      /**
+       * 不知道为啥这里需要判断是那种触发的，如果不是AdminClient触发的，都需要抛异常，这是出于什么考虑呢
+       * */
       if (electionTrigger != AdminClientTriggered) {
         results.foreach {
           case (tp, Left(throwable)) =>
@@ -987,6 +1002,9 @@ class KafkaController(val config: KafkaConfig,
 
       results
     } finally {
+      /**
+       * 如果不是AdminClientTriggered触发的，那么触发之前肯定是构建过事件放入eventmanage中，那么处理完后自然需要移除掉。
+       * */
       if (electionTrigger != AdminClientTriggered) {
         removePartitionsFromPreferredReplicaElection(partitions, electionTrigger == AutoTriggered)
       }
@@ -1128,7 +1146,9 @@ class KafkaController(val config: KafkaConfig,
       controllerContext.partitionFullReplicaAssignmentForTopic(topicPartition.topic) +=
       (topicPartition -> assignment)
 
-    val setDataResponse = zkClient.setTopicAssignmentRaw(topicPartition.topic, topicAssignment, controllerContext.epochZkVersion)
+    val setDataResponse = zkClient.setTopicAssignmentRaw(topicPartition.topic,
+      controllerContext.topicIds(topicPartition.topic),
+      topicAssignment, controllerContext.epochZkVersion)
     setDataResponse.resultCode match {
       case Code.OK =>
         info(s"Successfully updated assignment of partition $topicPartition to $assignment")
@@ -1258,6 +1278,9 @@ class KafkaController(val config: KafkaConfig,
           s"Leader is still $currentLeader")
       }
     }
+    /**
+     * 如果不是自动触发的，（而在进入这个方法前排除了AdminClientTriggered，那么也就只剩下zk触发的了）就需要删除zk目录
+     * */
     if (!isTriggeredByAutoRebalance) {
       zkClient.deletePreferredReplicaElection(controllerContext.epochZkVersion)
       // Ensure we detect future preferred replica leader elections
@@ -1340,8 +1363,24 @@ class KafkaController(val config: KafkaConfig,
     finalLeaderIsrAndControllerEpoch
   }
 
+  /**
+   * 方法名解释：check And Trigger（触发）  Auto Leader  Rebalance -> 检查和触发自动leader rebalance
+   *
+   * */
   private def checkAndTriggerAutoLeaderRebalance(): Unit = {
     trace("Checking need to trigger auto leader balancing")
+    /**
+     * 这里先过滤掉正在排队等待删除的partition。
+     * 这里的map、toMap、groupBy都是scala迭代器的接口方法，如果你完全搞懂scala的迭代器原理，那么scala你会有一个质变。
+     *
+     * preferredReplicasForTopicsByBrokers这个map的key是 <prefer_leader_brokerId(也就是ar中第一个元素),<TopicPartition,ARList>
+     *   意思是在该prefer_leader_brokerId上有哪些TopicPartition，以及它们的AR是啥。相当于是这样：
+     *   <tp1,<1,2,3>>
+     *   <tp2,<3,2,3>>
+     *   <tp3,<1,9,3>>
+     *
+     *   然后经过下面的groupby处理后变成： <1, {<<tp1,<1,2,3>>,<tp3,<1,9,3>>>}>  <3, {<tp2,<3,2,3>>}>
+     * */
     val preferredReplicasForTopicsByBrokers: Map[Int, Map[TopicPartition, Seq[Int]]] =
       controllerContext.allPartitions.filterNot {
         tp => topicDeletionManager.isTopicQueuedUpForDeletion(tp.topic)
@@ -1349,20 +1388,39 @@ class KafkaController(val config: KafkaConfig,
         (tp, controllerContext.partitionReplicaAssignment(tp) )
       }.toMap.groupBy { case (_, assignedReplicas) => assignedReplicas.head }
 
+
+    /**
+     * forKeyValue这个方法是kafka自己写的，似乎是利用了scala的implicit (隐式参数)关键字，就可以注入到一些已经存在的类和方法上。
+     * 这里不是特别懂，为啥preferredReplicasForTopicsByBrokers是scala的Map类，但是没有forKeyValue方法，这里居然可以调用到。
+     * */
     // for each broker, check if a preferred replica election needs to be triggered
     preferredReplicasForTopicsByBrokers.forKeyValue { (leaderBroker, topicPartitionsForBroker) =>
+      /**
+       * 这里是过滤出当前leader不是prefer leader的TopicPartition和AR：<topicPartition,AR>
+       * */
       val topicsNotInPreferredReplica = topicPartitionsForBroker.filter { case (topicPartition, _) =>
         val leadershipInfo = controllerContext.partitionLeadershipInfo(topicPartition)
         leadershipInfo.exists(_.leaderAndIsr.leader != leaderBroker)
       }
       debug(s"Topics not in preferred replica for broker $leaderBroker $topicsNotInPreferredReplica")
 
+      /**
+       * 这里是计算单broker的不均衡率（不均衡率是针对单个broker的）: （该broker上本该为leader，但是不是leader的partition数）不均衡的partition数/总的partition数（该broker上本该为leader的partiton总数）.
+       *
+       * */
       val imbalanceRatio = topicsNotInPreferredReplica.size.toDouble / topicPartitionsForBroker.size
       trace(s"Leader imbalance ratio for broker $leaderBroker is $imbalanceRatio")
 
+      /**
+       * 这里是判断不均衡率是否大于配置的不均衡率。不均衡率是通过leader.imbalance.per.broker.percentage来配置的，默认值是10，也就是10%
+       * */
       // check ratio and if greater than desired ratio, trigger a rebalance for the topic partitions
       // that need to be on this broker
       if (imbalanceRatio > (config.leaderImbalancePerBrokerPercentage.toDouble / 100)) {
+        /**
+         * 在从topicsNotInPreferredReplica中过滤出满足条件的partiiton：
+         * ①当前没有在做ressign；②该tp的topic不是处于删除队列的topic；③该tp所在topic没有在删除队列中;④该tp不是正处于prefer过程中；
+         * */
         // do this check only if the broker is live and there are no partitions being reassigned currently
         // and preferred replica election is not in progress
         val candidatePartitions = topicsNotInPreferredReplica.keys.filter(tp =>
@@ -1371,6 +1429,11 @@ class KafkaController(val config: KafkaConfig,
           controllerContext.allTopics.contains(tp.topic) &&
           canPreferredReplicaBeLeader(tp)
        )
+
+        /**
+         * 然后对这些partition做类型为PREFERRED的副本选举。
+         * AutoTriggered代表是通过自动prefer触发的，还有三类触发：ZkTriggered（zk触发）、AdminClientTriggered触发
+         * */
         onReplicaElection(candidatePartitions.toSet, ElectionType.PREFERRED, AutoTriggered)
       }
     }
@@ -1385,6 +1448,12 @@ class KafkaController(val config: KafkaConfig,
       .nonEmpty
   }
 
+  /**
+   * 这个是开启自动prefer后，会调用的方法，这个方法设计得很巧妙：
+   * 自动prefer调用的scheduler由于没传入执行间隔时间，因此是只会调用一次，但是这里在每次执行后，又会和之前一样再调用一次scheduler。
+   * 这样设计的目的应该是为了防止上一次没执行完，又启动了下一次执行（因为是放到scheduler线程池里执行的，所以有多余的线程可以执行）。
+   * 这样的设计可以做到使得每一次都串行执行（不会因为某一次执行耗时超过执行周期，而被多个线程同时调用）
+   * */
   private def processAutoPreferredReplicaLeaderElection(): Unit = {
     if (!isActive) return
     try {
@@ -1941,6 +2010,7 @@ class KafkaController(val config: KafkaConfig,
       }.toMap
 
       zkClient.setTopicAssignment(topic,
+        controllerContext.topicIds(topic),
         existingPartitionReplicaAssignment,
         controllerContext.epochZkVersion)
     }

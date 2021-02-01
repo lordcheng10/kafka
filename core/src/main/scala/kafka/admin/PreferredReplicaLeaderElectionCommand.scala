@@ -285,6 +285,9 @@ object PreferredReplicaLeaderElectionCommand extends Logging {
   }
 }
 
+/**
+ * 奇怪这里又没main方法，为啥会有运行按钮? 喔 ，我知道了，如果一个类有对应的object类定义，并且在该object中还有main方法，那么在class和object上都会有一个运行按钮。
+ * */
 class PreferredReplicaLeaderElectionCommand(zkClient: KafkaZkClient, partitionsFromUser: scala.collection.Set[TopicPartition]) {
   def moveLeaderToPreferredReplica(): Unit = {
     try {

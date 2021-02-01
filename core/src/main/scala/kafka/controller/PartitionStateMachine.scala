@@ -166,6 +166,10 @@ class ZkPartitionStateMachine(config: KafkaConfig,
           targetState,
           partitionLeaderElectionStrategyOpt
         )
+        /**
+         * 这里就开始发送leader and isr请求去切换leader了，那么有个问题谁去写zk，因为zk上记录的leader需要变更? 我理解是broker去写吧，
+         * broker在收到leaderand isr请求后，做leader and isr请求处理，处理完后就可以写zk了
+         * */
         controllerBrokerRequestBatch.sendRequestsToBrokers(controllerContext.epoch)
         result
       } catch {
@@ -423,6 +427,9 @@ class ZkPartitionStateMachine(config: KafkaConfig,
       case ReassignPartitionLeaderElectionStrategy =>
         leaderForReassign(controllerContext, validLeaderAndIsrs).partition(_.leaderAndIsr.isEmpty)
       case PreferredReplicaPartitionLeaderElectionStrategy =>
+        /**
+         * 这里才是正在做prefer处理的方法。
+         * */
         leaderForPreferredReplica(controllerContext, validLeaderAndIsrs).partition(_.leaderAndIsr.isEmpty)
       case ControlledShutdownPartitionLeaderElectionStrategy =>
         leaderForControlledShutdown(controllerContext, validLeaderAndIsrs).partition(_.leaderAndIsr.isEmpty)
