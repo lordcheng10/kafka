@@ -302,6 +302,9 @@ class KafkaApis(val requestChannel: RequestChannel,
       if (authorizedTopics.isEmpty)
         sendResponseCallback(Map.empty)
       else if (header.apiVersion == 0) {
+        /**
+         * 看起来0.11.0版本也支持old consumer 发rpc过来提交offset，从而reset offset啊？难道是bug？
+         * */
         // for version 0 always store offsets to ZK
         val responseInfo = authorizedTopics.map {
           case (topicPartition, partitionData) =>

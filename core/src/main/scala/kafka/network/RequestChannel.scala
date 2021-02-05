@@ -166,6 +166,9 @@ object RequestChannel extends Logging {
       val apiRemoteTime = nanosToMs(apiRemoteCompleteTimeNanos - apiLocalCompleteTimeNanos)
       /**
        * 构建callback-> 放入限速delay queue -> 从delayQueu中取出：这里是限速耗时统计
+       *
+       * 这样统计是有问题，这个值统计出来大于0并不能说是触发限速了,这个修复是在trunk版本：
+       * https://github.com/apache/kafka/commit/322b10964ce71eac81da9e574be7dec59c0fc93d
        * */
       val apiThrottleTime = nanosToMs(responseCompleteTimeNanos - apiRemoteCompleteTimeNanos)
 

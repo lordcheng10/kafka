@@ -246,6 +246,9 @@ object CoreUtils extends Logging {
   }
 
   /**
+   * 这里是返回一个重复的列表.
+   *
+   * 这里传入的Traversable类型有是啥
    * Returns a list of duplicated items
    */
   def duplicates[T](s: Traversable[T]): Iterable[T] = {

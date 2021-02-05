@@ -150,23 +150,46 @@ object ReassignPartitionsCommand extends Logging {
   def executeAssignment(zkUtils: ZkUtils, opts: ReassignPartitionsCommandOptions) {
     val reassignmentJsonFile =  opts.options.valueOf(opts.reassignmentJsonFileOpt)
     val reassignmentJsonString = Utils.readFileAsString(reassignmentJsonFile)
+    /**
+     * 这里会获取throttle选项值,如果为-1，那么就是没有传，也就不限速，否则就是要限速。
+     * */
     val throttle = if (opts.options.has(opts.throttleOpt)) opts.options.valueOf(opts.throttleOpt) else -1
     executeAssignment(zkUtils, reassignmentJsonString, Throttle(throttle))
   }
 
   def executeAssignment(zkUtils: ZkUtils, reassignmentJsonString: String, throttle: Throttle) {
+    /**
+     * 这里是解析json字符串
+     * */
     val partitionsToBeReassigned = parseAndValidate(zkUtils, reassignmentJsonString)
+    /**
+     *
+     * */
     val reassignPartitionsCommand = new ReassignPartitionsCommand(zkUtils, partitionsToBeReassigned.toMap)
 
+    /**
+     * 如果当前存在某个rebalance任务，那么尝试去修改它的throttle。
+     * 也就是说如果想更新某个reassign ，那么可以多次提交reassign，只是改变下throttle就可以修改限速阈值。
+     * */
     // If there is an existing rebalance running, attempt to change its throttle
     if (zkUtils.pathExists(ZkUtils.ReassignPartitionsPath)) {
+      /**
+       * 如果存在真正reassign的任务，那么久重置限速阈值
+       * */
       println("There is an existing assignment running.")
       reassignPartitionsCommand.maybeLimit(throttle)
     }
     else {
+      /**
+       * 否则，就真正限速.
+       *
+       * */
       printCurrentAssignment(zkUtils, partitionsToBeReassigned)
       if (throttle.value >= 0)
         println(String.format("Warning: You must run Verify periodically, until the reassignment completes, to ensure the throttle is removed. You can also alter the throttle by rerunning the Execute command passing a new value."))
+      /**
+       * 然后reassignPartitionsCommand.reassignPartitions这个方法才是真正提交json串的
+       * */
       if (reassignPartitionsCommand.reassignPartitions(throttle)) {
         println("Successfully started reassignment of partitions.")
       } else
@@ -175,6 +198,10 @@ object ReassignPartitionsCommand extends Logging {
   }
 
   def printCurrentAssignment(zkUtils: ZkUtils, partitionsToBeReassigned: Seq[(TopicAndPartition, Seq[Int])]): Unit = {
+    /**
+     * 这里把当前的副本分配打印出来了，看日志的意思是加上--reassignment-json-file的话，可以保存现在的分配计划。
+     * 但是--reassignment-json-file不是指定提交的josn串的文件路径吗，怎么是用来保存当前的分配计划了？看到有个during rollback，难道是说会轮转一份来保存当前的分配计划？
+     * */
     // before starting assignment, output the current replica assignment to facilitate rollback
     val currentPartitionReplicaAssignment = zkUtils.getReplicaAssignmentForTopics(partitionsToBeReassigned.map(_._1.topic))
     println("Current partition replica assignment\n\n%s\n\nSave this to use as the --reassignment-json-file option during rollback"
@@ -182,39 +209,94 @@ object ReassignPartitionsCommand extends Logging {
   }
 
   def parseAndValidate(zkUtils: ZkUtils, reassignmentJsonString: String): Seq[(TopicAndPartition, Seq[Int])] = {
+    /**
+     * 这里是没有去重的解析json字符串，然后生成Seq[(TopicAndPartition, Seq[Int])]
+     * */
     val partitionsToBeReassigned = ZkUtils.parsePartitionReassignmentDataWithoutDedup(reassignmentJsonString)
 
+    /**
+     * 这里是检查reassign json串是否合理：①json串不能为空；①每个tp的AR不能为空。
+     * */
     if (partitionsToBeReassigned.isEmpty)
       throw new AdminCommandFailedException("Partition reassignment data file is empty")
     if (partitionsToBeReassigned.exists(_._2.isEmpty)) {
       throw new AdminCommandFailedException("Partition replica list cannot be empty")
     }
+
+    /**
+     * 因为上面从json串中获取的partitionsToBeReassigned没有去重，所以下面这里就进行了去重。
+     * 返回的是一个去重partition集合。
+     * */
     val duplicateReassignedPartitions = CoreUtils.duplicates(partitionsToBeReassigned.map { case (tp, _) => tp })
+
+
+    /**
+     * 如果存在重复的 就抛异常
+     * */
     if (duplicateReassignedPartitions.nonEmpty)
       throw new AdminCommandFailedException("Partition reassignment contains duplicate topic partitions: %s".format(duplicateReassignedPartitions.mkString(",")))
+
+    /**
+     * 这里检查是否有重复的副本。
+     * */
     val duplicateEntries = partitionsToBeReassigned
       .map { case (tp, replicas) => (tp, CoreUtils.duplicates(replicas))}
       .filter { case (_, duplicatedReplicas) => duplicatedReplicas.nonEmpty }
+
+    /**
+     * 如果存在有某个partition的AR有重复的副本，那么抛异常
+     * */
     if (duplicateEntries.nonEmpty) {
       val duplicatesMsg = duplicateEntries
         .map { case (tp, duplicateReplicas) => "%s contains multiple entries for %s".format(tp, duplicateReplicas.mkString(",")) }
         .mkString(". ")
       throw new AdminCommandFailedException("Partition replica lists may not contain duplicate entries: %s".format(duplicatesMsg))
     }
+
+    /**
+     * 首先把涉及到的topic去重整理出来。
+     *
+     * 下面的注释实际是建议检查是否所有的tp都存在于该集群中，但似乎没看到有检查tp是否存在于该cluster的代码。不，下面有做这样的检查。
+     * */
     // check that all partitions in the proposed assignment exist in the cluster
     val proposedTopics = partitionsToBeReassigned.map { case (tp, _) => tp.topic }.distinct
+
+    /**
+     * 获取本次reassign涉及到的topic当前的分配信息：mutable.Map[TopicAndPartition, Seq[Int]]
+     * */
     val existingAssignment = zkUtils.getReplicaAssignmentForTopics(proposedTopics)
+    /**
+     * 然后检查下提交的分配计划设计的tp是否存在于当前集群。所以实际上，上面建议检查tp是否存在是做了的
+     * */
     val nonExistentPartitions = partitionsToBeReassigned.map { case (tp, _) => tp }.filterNot(existingAssignment.contains)
+    /**
+     * 如果确实存在提交的分配计划中某个tp不在该机器，那么抛异常。
+     * */
     if (nonExistentPartitions.nonEmpty)
       throw new AdminCommandFailedException("The proposed assignment contains non-existent partitions: " +
         nonExistentPartitions)
 
+    /**
+     * 这里注释的意思是，检查分配计划涉及的broker是否在该集群存在。
+     * 首先是获取当前活着的brokerId集合。
+     * */
     // check that all brokers in the proposed assignment exist in the cluster
     val existingBrokerIDs = zkUtils.getSortedBrokerList()
+
+    /**
+     * 这里过滤出不存在的brokerId。
+     * 注意它是拿的活着的broker
+     * */
     val nonExistingBrokerIDs = partitionsToBeReassigned.toMap.values.flatten.filterNot(existingBrokerIDs.contains).toSet
+    /**
+     * 如果分配的计划有某个brokerId实际是不存在的，那么抛异常。
+     * */
     if (nonExistingBrokerIDs.nonEmpty)
       throw new AdminCommandFailedException("The proposed assignment contains non-existent brokerIDs: " + nonExistingBrokerIDs.mkString(","))
 
+    /**
+     * 如果上面的检查都没问题，那么久把分配计划返回出去
+     * */
     partitionsToBeReassigned
   }
 
@@ -328,24 +410,46 @@ class ReassignPartitionsCommand(zkUtils: ZkUtils, proposedAssignment: Map[TopicA
   }
 
   private def maybeThrottle(throttle: Throttle): Unit = {
+    /**
+     * 当throttle.value>=0才是真正给定了限速选项的。否则是-1
+     * */
     if (throttle.value >= 0) {
+      /**
+       * 首先这里把限速的replica 提交上去，确认要限速哪些replica
+       * */
       assignThrottledReplicas(existingAssignment(), proposedAssignment)
+      /**
+       * 然后这里是设置broker限速的quota，确认哪些broker要限速
+       * */
       maybeLimit(throttle)
+      /**
+       * 然后这里调用限速的回调,默认回调是一个空方法
+       * */
       throttle.postUpdateAction()
       println(s"The throttle limit was set to ${throttle.value} B/s")
     }
   }
 
   /**
+   * 如果throttle的value不是-1，那么就是要限速。
+   *
     * Limit the throttle on currently moving replicas. Note that this command can use used to alter the throttle, but
     * it may not alter all limits originally set, if some of the brokers have completed their rebalance.
     */
   def maybeLimit(throttle: Throttle) {
     if (throttle.value >= 0) {
+      /**
+       * 如果要限速，那么计算出当前存在的broker和提交的分配任务涉及到的broker求并集，然后去重。
+       * 因为在此之前就检查过提交的分配任务设计的broker是存在的，如果不存在，那么在之前就抛异常了。
+       * 这里求并集是为了防止当前有新增broker，可以充分利用
+       * */
       val existingBrokers = existingAssignment().values.flatten.toSeq
       val proposedBrokers = proposedAssignment.values.flatten.toSeq
       val brokers = (existingBrokers ++ proposedBrokers).distinct
 
+      /**
+       * 这里遍历每个broker，然后更新它的config
+       * */
       for (id <- brokers) {
         val configs = admin.fetchEntityConfig(zkUtils, ConfigType.Broker, id.toString)
         configs.put(DynamicConfig.Broker.LeaderReplicationThrottledRateProp, throttle.value.toString)
@@ -355,17 +459,50 @@ class ReassignPartitionsCommand(zkUtils: ZkUtils, proposedAssignment: Map[TopicA
     }
   }
 
+  /**
+   * 这个方法是设置要限速的replica。然后它这个注释的意思是：该方法只是被用来作为reassign 初始化的时候
+   * */
   /** Set throttles to replicas that are moving. Note: this method should only be used when the assignment is initiated. */
   private[admin] def assignThrottledReplicas(allExisting: Map[TopicAndPartition, Seq[Int]], allProposed: Map[TopicAndPartition, Seq[Int]], admin: AdminUtilities = AdminUtils): Unit = {
+    /**
+     * 本次reassign涉及到的topic.
+     * allProposed.keySet.map(_.topic).toSeq 这个方法是提取本次reassign涉及到的topic
+     * */
     for (topic <- allProposed.keySet.map(_.topic).toSeq) {
+      /**
+       * filterBy这个方法又是啥
+       * */
       val (existing, proposed) = filterBy(topic, allExisting, allProposed)
 
+      /**
+       * preRebalanceReplicaForMovingPartitions这个方法是干啥的？
+       *
+       * 我知道了，这里的leader并不是当前某个tp的leader，而是当前某个tp的所有副本都是leader，因为我在数据迁移过程中可能有leader切换，这样拖的broker就有可能变成了该tp的所有副本所在broker之一，
+       * 因此这里的leader字符串，包括了所有需要更改tp副本所在broker的tp对应的所有副本，format格式是：
+       * tpId:replicaId,tpId2:replicaId2
+       *
+       * 其实这里有个问题，比如：当前tp0 AR(1,2,3) 我想变成AR(4,5,6) ，那么正常情况下，都是4 5 6 去拖1 2 3 ，因此这里配置的leader replica应该涉及到1，2，3三个replicaId，但是
+       * 当4进队后，IS变成（1，2，3，4） ，而此时当前leader宕机了，leader切换为4了，那么5和6岂不是要去拖4，但4这个副本并未限速？那不被拖爆吗
+       *
+       * 或者这里涉及到leader的选举策略，其实当中间AR变成1，2，3，4，5，6时，如果4进队后，2和3在isr中，那么应该是选前面的2或者3，但是如果2和3也宕机了呢 ？这个就比较极端了
+       * 那么此时就会出现我说那个情况。却是会有问题，可以提个patch TODO-chenlin fix reassing throttle
+       * 应该是本次涉及到的副本都要加入leader限速配置
+       * */
       //Apply the leader throttle to all replicas that exist before the re-balance.
       val leader = format(preRebalanceReplicaForMovingPartitions(existing, proposed))
 
+
+      /**
+       * 这个方法是把新增的副本过滤出来，并以Map[TopicAndPartition, Seq[Int]]这样的形式返回,eg:
+       * tp1  AR(1,2,3) 变为AR(2,3,4,5)
+       * 那么这里返回<tp1 ,(4,5) >
+       * */
       //Apply a follower throttle to all "move destinations".
       val follower = format(postRebalanceReplicasThatMoved(existing, proposed))
 
+      /**
+       * 然后这里把对应的配置进行更新。这里是更新的replica限速配置，表明要限速哪些replica
+       * */
       val configs = admin.fetchEntityConfig(zkUtils, ConfigType.Topic, topic)
       configs.put(LeaderReplicationThrottledReplicasProp, leader)
       configs.put(FollowerReplicationThrottledReplicasProp, follower)
@@ -376,6 +513,11 @@ class ReassignPartitionsCommand(zkUtils: ZkUtils, proposedAssignment: Map[TopicA
     }
   }
 
+  /**
+   * 这个方法是把新增的副本过滤出来，并以Map[TopicAndPartition, Seq[Int]]这样的形式返回,eg:
+   * tp1  AR(1,2,3) 变为AR(2,3,4,5)
+   * 那么这里返回<tp1 ,(4,5) >
+   * */
   private def postRebalanceReplicasThatMoved(existing: Map[TopicAndPartition, Seq[Int]], proposed: Map[TopicAndPartition, Seq[Int]]): Map[TopicAndPartition, Seq[Int]] = {
     //For each partition in the proposed list, filter out any replicas that exist now, and hence aren't being moved.
     proposed.map { case (tp, proposedReplicas) =>
@@ -383,6 +525,9 @@ class ReassignPartitionsCommand(zkUtils: ZkUtils, proposedAssignment: Map[TopicA
     }
   }
 
+  /**
+   * 这里似乎是把涉及副本搬迁的tp的当前分配图返回出来（可能存在reassign前后的AR副本一样的tp，或者可能只是换了顺序或者就是写错了，写成原来的AR了）：
+   * */
   private def preRebalanceReplicaForMovingPartitions(existing: Map[TopicAndPartition, Seq[Int]], proposed: Map[TopicAndPartition, Seq[Int]]): Map[TopicAndPartition, Seq[Int]] = {
     def moving(before: Seq[Int], after: Seq[Int]) = (after.toSet -- before.toSet).nonEmpty
     //For any moving partition, throttle all the original (pre move) replicas (as any one might be a leader)
@@ -391,20 +536,38 @@ class ReassignPartitionsCommand(zkUtils: ZkUtils, proposedAssignment: Map[TopicA
     }
   }
 
+  /**
+   * 这里的格式应该是：tpId:replicaId,tpId2:replicaId2,....
+   * */
   def format(moves: Map[TopicAndPartition, Seq[Int]]): String =
     moves.flatMap { case (tp, moves) =>
       moves.map(replicaId => s"${tp.partition}:${replicaId}")
     }.mkString(",")
 
+  /**
+   * 这个filterBy主要是用来获取给定topic当前的副本分布情况和计划的分布情况，并以(tp,AR)的形式返回：
+   * (Map[TopicAndPartition, Seq[Int]], Map[TopicAndPartition, Seq[Int]])
+   * */
   def filterBy(topic: String, allExisting: Map[TopicAndPartition, Seq[Int]], allProposed: Map[TopicAndPartition, Seq[Int]]): (Map[TopicAndPartition, Seq[Int]], Map[TopicAndPartition, Seq[Int]]) = {
     (allExisting.filter { case (tp, _) => tp.topic == topic },
       allProposed.filter { case (tp, _) => tp.topic == topic })
   }
 
   def reassignPartitions(throttle: Throttle = NoThrottle): Boolean = {
+    /**
+     * 首先设置限速配置
+     * */
     maybeThrottle(throttle)
+
     try {
+      /**
+       * 这里检查下tp是否存在
+       * */
       val validPartitions = proposedAssignment.filter { case (p, _) => validatePartition(zkUtils, p.topic, p.partition) }
+
+      /**
+       * 然后这里提交reassign json串到zk上
+       * */
       if (validPartitions.isEmpty) false
       else {
         val jsonReassignmentData = ZkUtils.formatAsReassignmentJson(validPartitions)

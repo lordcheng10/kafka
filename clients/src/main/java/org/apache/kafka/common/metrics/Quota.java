@@ -21,6 +21,10 @@ package org.apache.kafka.common.metrics;
  */
 public final class Quota {
 
+    /**
+     * upper：是否是上限；true是上限，false是下限
+     * bound：上限或下限值
+     * */
     private final boolean upper;
     private final double bound;
 

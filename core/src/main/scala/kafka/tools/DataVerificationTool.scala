@@ -25,7 +25,7 @@ object DataVerificationTool {
     val consumerProps = getConsumerProps(checkConfig)
     val producerProps = getProducerProps(checkConfig)
 
-    for (i <- 0 to checkConfig.checkNum - 1) {
+    for (_ <- 0 to checkConfig.checkNum - 1) {
       check(producerProps, consumerProps, checkConfig)
     }
   }

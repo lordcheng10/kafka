@@ -334,11 +334,16 @@ class ReplicaFetcherThread(name: String,
   }
 
   /**
+   *
+   * 判断follower是否限速
    *  To avoid ISR thrashing, we only throttle a replica on the follower if it's in the throttled replica list,
    *  the quota is exceeded and the replica is not in sync.
    */
   private def shouldFollowerThrottle(quota: ReplicaQuota, topicPartition: TopicPartition): Boolean = {
     val isReplicaInSync = fetcherLagStats.isReplicaInSync(topicPartition.topic, topicPartition.partition)
+    /**
+     * 很明显这里也判断是该replica是否是要限速的replica。
+     * */
     quota.isThrottled(topicPartition) && quota.isQuotaExceeded && !isReplicaInSync
   }
 }

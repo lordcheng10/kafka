@@ -85,6 +85,9 @@ class ReplicationQuotaManager(val config: ReplicationQuotaManagerConfig,
   def updateQuota(quota: Quota) {
     inWriteLock(lock) {
       this.quota = quota
+      /**
+       * 限速和metric绑定在一块了
+       * */
       //The metric could be expired by another thread, so use a local variable and null check.
       val metric = metrics.metrics.get(rateMetricName)
       if (metric != null) {

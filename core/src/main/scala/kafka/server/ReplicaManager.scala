@@ -793,6 +793,7 @@ class ReplicaManager(val config: KafkaConfig,
   }
 
   /**
+   * 这里是leader判断是否限速的逻辑
    *  To avoid ISR thrashing, we only throttle a replica on the leader if it's in the throttled replica list,
    *  the quota is exceeded and the replica is not in sync.
    */
@@ -800,6 +801,13 @@ class ReplicaManager(val config: KafkaConfig,
     val isReplicaInSync = getPartition(topicPartition).flatMap { partition =>
       partition.getReplica(replicaId).map(partition.inSyncReplicas.contains)
     }.getOrElse(false)
+
+    /**
+     * 这里有三个条件判断是否要throttle:
+     * isThrottled判断是否是要限速的replica
+     * quota.isQuotaExceeded判断是否超过quota
+     * isReplicaInSync：判断是否是在ISR中，如果是在ISR中的，不用限速，即便超了
+     * */
     quota.isThrottled(topicPartition) && quota.isQuotaExceeded && !isReplicaInSync
   }
 

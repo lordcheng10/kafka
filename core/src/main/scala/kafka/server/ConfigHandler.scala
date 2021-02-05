@@ -184,6 +184,10 @@ class BrokerConfigHandler(private val brokerConfig: KafkaConfig, private val quo
       else
         DefaultReplicationThrottledRate
     }
+
+    /**
+     * 这里更新leader和follower的数据传输速度。
+     * */
     if (brokerConfig.brokerId == brokerId.trim.toInt) {
       quotaManagers.leader.updateQuota(upperBound(getOrDefault(LeaderReplicationThrottledRateProp)))
       quotaManagers.follower.updateQuota(upperBound(getOrDefault(FollowerReplicationThrottledRateProp)))
