@@ -42,6 +42,8 @@ trait ConfigHandler {
 }
 
 /**
+ * topic config包括限速配置
+ *
   * The TopicConfigHandler will process topic config changes in ZK.
   * The callback provides the topic name and the full properties set read from ZK
   */
@@ -69,9 +71,23 @@ class TopicConfigHandler(private val logManager: LogManager, kafkaConfig: KafkaC
       logs.foreach(_.config = logConfig)
     }
 
+    /***
+     * 这里传入的prop只有两种类型：
+     * val LeaderReplicationThrottledReplicasProp = "leader.replication.throttled.replicas"
+     * val FollowerReplicationThrottledReplicasProp = "follower.replication.throttled.replicas"
+     *
+     * 这里的topicConfig是外部函数processConfigChanges方法传入的，
+     * */
     def updateThrottledList(prop: String, quotaManager: ReplicationQuotaManager) = {
       if (topicConfig.containsKey(prop) && topicConfig.getProperty(prop).length > 0) {
+        /**
+         * 限速replica配置就是在这里解析成partitions集合，然后通过quotaManager.markThrottled接口放到throttledPartitions：ConcurrentHashMap[String, Seq[Int]]中，
+         *
+         * */
         val partitions = parseThrottledPartitions(topicConfig, kafkaConfig.brokerId, prop)
+        /**
+         * 这里把partitions放到ConcurrentHashMap[String, Seq[Int]]中
+         * */
         quotaManager.markThrottled(topic, partitions)
         logger.debug(s"Setting $prop on broker ${kafkaConfig.brokerId} for topic: $topic and partitions $partitions")
       } else {
@@ -83,17 +99,23 @@ class TopicConfigHandler(private val logManager: LogManager, kafkaConfig: KafkaC
     updateThrottledList(LogConfig.FollowerReplicationThrottledReplicasProp, quotas.follower)
   }
 
+  /**
+   * parseThrottledPartitions : 这个方法字面意思理解就是parse(解析) Throttled（限速的）  Partitions（partition集合）
+   * */
   def parseThrottledPartitions(topicConfig: Properties, brokerId: Int, prop: String): Seq[Int] = {
+    /**
+     * 这里configValue拿到的就是类似这种字符串：tpId1:replicaId1,tpId2:replicaId2,....
+     * */
     val configValue = topicConfig.get(prop).toString.trim
     ThrottledReplicaListValidator.ensureValidString(prop, configValue)
     configValue match {
-      case "" => Seq()
-      case "*" => AllReplicas
-      case _ => configValue.trim
+      case "" => Seq() //如果configValue为空，那么久没有要限速的replica
+      case "*" => AllReplicas //如果是*就是全部replica
+      case _ => configValue.trim //否则就是直接该值，上面不是刚trim过吗 怎么这里又trim，多余了
         .split(",")
-        .map(_.split(":"))
-        .filter(_ (1).toInt == brokerId) //Filter this replica
-        .map(_ (0).toInt).toSeq //convert to list of partition ids
+        .map(_.split(":"))//这里split后就变成：<Array(tpId1,replicaId1),Array(tpId2,replicaId2),....>
+        .filter(_ (1).toInt == brokerId) //Filter this replica 这里的_ (1)就是获取数组的第二个元素，也就是replicaId，把等于当前本机brokerId的过滤出来
+        .map(_ (0).toInt).toSeq //convert to list of partition ids 对于是本机上的元素，这里把tpId获取出来返回，也就是说这里返回的是要限速的partitionId
     }
   }
   

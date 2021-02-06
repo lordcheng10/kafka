@@ -119,6 +119,13 @@ class ReplicationQuotaManager(val config: ReplicationQuotaManagerConfig,
     * @return
     */
   override def isThrottled(topicPartition: TopicPartition): Boolean = {
+    /**
+     * throttledPartitions:ConcurrentHashMap[String, Seq[Int]] key是topic，value是partitionId集合
+     * ，意思是在这个broker上的这个topic的这些parititon要限速（放到全局看的话，实际就是这个topic的这些replica要限速，broker加partitionId对应的就是replica），
+     * 那么我们在设置哪些replica要限速的时候是怎么设置的呢？是这样设置的：tpId:replicaId,tpId2:replicaId2
+     * 客户端命令工具只是把config写到了目录：/config/changes/config_change_上 然后由controller触发监听后读取进行解析放到内存中，也就是放到throttledPartitions中
+     * 如果我们设置了对应topic的所有replica限速，那么放入throttledPartitions的值就是val AllReplicas = Seq[Int](-1)，否则就看实际是否包含这个partitionId。
+     * */
     val partitions = throttledPartitions.get(topicPartition.topic)
     if (partitions != null)
       (partitions eq AllReplicas) || partitions.contains(topicPartition.partition)
@@ -141,6 +148,7 @@ class ReplicationQuotaManager(val config: ReplicationQuotaManagerConfig,
   }
 
   /**
+   * 更新限速的replica tp就是在这里更新的
     * Update the set of throttled partitions for this QuotaManager. The partitions passed, for
     * any single topic, will replace any previous
     *

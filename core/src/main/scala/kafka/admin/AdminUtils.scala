@@ -588,6 +588,10 @@ object AdminUtils extends Logging with AdminUtilities {
     }
   }
 
+  /**
+   * 看起来配置都是写到一个change目录，然后由controller监听发现后，读取下来，解析生成对应的数据结构存放到内存，再删除目录。
+   * 目录是在：/config/changes/config_change_上
+   * */
   private def changeEntityConfig(zkUtils: ZkUtils, rootEntityType: String, fullSanitizedEntityName: String, configs: Properties) {
     val sanitizedEntityPath = rootEntityType + '/' + fullSanitizedEntityName
     val entityConfigPath = getEntityConfigPath(rootEntityType, fullSanitizedEntityName)
