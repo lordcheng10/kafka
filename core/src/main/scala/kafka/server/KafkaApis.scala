@@ -332,6 +332,11 @@ class KafkaApis(val requestChannel: RequestChannel,
      * Iterable 别名->scala.collection.Iterable 继承->IterableOnce
      * Set继承->scala.collection.Iterable
      *
+     * 喔 这样的，如果1个元素找Set1 2个找Set2.。。一直到Set4，再多久是调用的HashSet了,这些都是有具体实现的。如果是没有元素，就调用的EmptySet，
+     * 这些都是有foreach() 和iterator()方法的具体实现的。
+     *
+     * 其实这个方法传入的是 mutable.Set[Partition]()类型或者EmptySet，所以如果是前者 那就是直接调用的mutable.Set的foreach。 这里其实基本没有涉及到Set1  Set2这种类型。
+     *
      * */
     def onLeadershipChange(updatedLeaders: Iterable[Partition], updatedFollowers: Iterable[Partition]): Unit = {
       /**
@@ -341,6 +346,10 @@ class KafkaApis(val requestChannel: RequestChannel,
        * 对于每一个新的领导或跟随者，呼叫协调人员处理消费群体迁移。这个回调函数在replica状态更改锁下调用，以确保领导权更改的正确顺序
        *
        * 似乎在当前broker中的group metadata卸载和加载过程和leader切换过程需要有顺序保证
+       *
+       *
+       * updatedLeaders：要更新为leader的partition
+       * updatedFollowers：要更新为follower的partition
        * */
       // for each new leader or follower, call coordinator to handle consumer group migration.
       // this callback is invoked under the replica state change lock to ensure proper order of leadership changes
@@ -350,10 +359,12 @@ class KafkaApis(val requestChannel: RequestChannel,
          * 如果本次涉及的leader切换是consumer offset这个topic，那么调用 groupCoordinator.onElection，否则调用txnCoordinator.onElectio
          * groupCoordinator.onElection会启动一个schedule来定期load consumer group元数据信息，那么问题来了，为啥要定期load呢？
          * load一次不就好了吗，后面用户提交都会修改内存，不是吗？
+         *
+         * 其实没有定期执行，调用的那个schedule方法只传入了两个参数，没有传执行周期，因此只会执行一次。
          */
-        if (partition.topic == GROUP_METADATA_TOPIC_NAME)
+        if (partition.topic == GROUP_METADATA_TOPIC_NAME) //如果要切为leader的是__consumer_offsets这个topic，那么走groupCoordinator.onElection
           groupCoordinator.onElection(partition.partitionId)
-        else if (partition.topic == TRANSACTION_STATE_TOPIC_NAME)
+        else if (partition.topic == TRANSACTION_STATE_TOPIC_NAME) //如果要切为leader的是__transaction_state这个topic，那么走txnCoordinator.onElection
           txnCoordinator.onElection(partition.partitionId, partition.getLeaderEpoch)
       }
 
@@ -515,6 +526,8 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   /**
+   * 用户提交的offset，服务端收到后到底是怎么处理的呢？
+   * storeOffsets(...)这个方法的注释有解释，会先写log文件，然后再写cache
    *
    * 我们用ConsumerGroupCommand来进行reset offset的时候，似乎是通过rpc 提交给broker服务端，然后由服务端来进行reset offset。
    * 这样做的目的是为了更好的做权限控制。那么对于old consumer也是如此吗  让broker来修改zk？

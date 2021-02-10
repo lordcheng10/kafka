@@ -376,6 +376,7 @@ class ReplicaFetcherThread(name: String,
   }
 
   /**
+   * 判断follower是否限速
    *  To avoid ISR thrashing, we only throttle a replica on the follower if it's in the throttled replica list,
    *  the quota is exceeded and the replica is not in sync.
    */

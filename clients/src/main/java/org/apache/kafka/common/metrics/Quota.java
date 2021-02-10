@@ -45,6 +45,10 @@ public final class Quota {
         return this.bound;
     }
 
+
+    /**
+     * 如果是上限(upper==true) 那么<= bound  否则>=bound
+     * */
     public boolean acceptable(double value) {
         return (upper && value <= bound) || (!upper && value >= bound);
     }

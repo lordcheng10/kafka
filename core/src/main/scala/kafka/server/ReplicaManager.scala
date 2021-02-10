@@ -1246,6 +1246,15 @@ class ReplicaManager(val config: KafkaConfig,
    */
   def shouldLeaderThrottle(quota: ReplicaQuota, partition: Partition, replicaId: Int): Boolean = {
     val isReplicaInSync = partition.inSyncReplicaIds.contains(replicaId)
+    /**
+     * 对比了下0.11.0.2，这里有一些优化，把isReplicaInSync条件到最开始了，这样减少了后面两个条件的判断，0.11.0是这样写的：
+     * quota.isThrottled(topicPartition) && quota.isQuotaExceeded && !isReplicaInSync
+     *
+     * 这里有三个条件判断是否要throttle:
+     * isThrottled判断是否是要限速的replica
+     * quota.isQuotaExceeded判断是否超过quota
+     * isReplicaInSync：判断是否是在ISR中，如果是在ISR中的，不用限速，即便超了
+     * */
     !isReplicaInSync && quota.isThrottled(partition.topicPartition) && quota.isQuotaExceeded
   }
 
@@ -1437,6 +1446,23 @@ class ReplicaManager(val config: KafkaConfig,
            * 这里会做实际的leader变更操作，返回变成leader 的partition集合.
            *
            * 这里返回的是一个迭代器类型，那么迭代器是怎么构建出来的 ？原理是什么？
+           *
+           * 这里如果返回的是Set.empty类型，那么元素少于5时，类型都是Set1 ....4 ，否则是HashSet类型。
+           * 那么具体的foreach实现就是HashSet的实现：
+           * override def foreach[U](f: A => U): Unit = {
+           * val len = table.length
+           * var i = 0
+           * while(i < len) {
+           * val n = table(i)
+           * if(n ne null) n.foreach(f)
+           * i += 1
+           * }
+           * }
+           *
+           *
+           * 之前理解错了，之前我做测试用的 Set.empty[..]定义的，所以才会有Empty  Set1  Set2一直到Set4 、HashSet的演变，从而我以为Set都会有这个演变，实际不是，如果是用mutable.Set
+           * 定义的，那么久没有这个演变过程，而是直接是HashSet类型。那么调用的也就是HashSet的foreach 方法。
+           *
            * */
           val partitionsBecomeLeader = if (partitionsToBeLeader.nonEmpty)
             makeLeaders(controllerId, controllerEpoch, partitionsToBeLeader, correlationId, responseMap,

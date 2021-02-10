@@ -24,6 +24,11 @@ import scala.annotation.nowarn
 import scala.jdk.CollectionConverters._
 
 /**
+ *
+ * 这里定义了一些隐式类型，如果那里需要使用的话，需要import下：
+ * `import kafka.utils.Implicits._`
+ *
+ * 这里是scala隐式参数机制的应用场景，关于scala隐式参数讲解可以参考：https://www.jianshu.com/p/1d119c937015
   * In order to have these implicits in scope, add the following import:
   *
   * `import kafka.utils.Implicits._`

@@ -320,6 +320,9 @@ class GroupMetadataManager(brokerId: Int,
     }
   }
 
+  /***
+   * 服务端收到用户提交的offset后，把offset构建成records，然后写入log文件，完成后通过call back回调函数，写入cache
+   * */
   private def appendForGroup(group: GroupMetadata,
                              records: Map[TopicPartition, MemoryRecords],
                              callback: Map[TopicPartition, PartitionResponse] => Unit): Unit = {
@@ -335,6 +338,9 @@ class GroupMetadataManager(brokerId: Int,
   }
 
   /**
+   * 这里注释已经说了，把offset存储到replica log文件，然后再插入到cache。
+   * 也就是说，用户提交的offset是会先写入log文件，然后再写cache
+   *
    * Store offsets by appending it to the replicated log and then inserting to cache
    */
   def storeOffsets(group: GroupMetadata,
@@ -368,6 +374,9 @@ class GroupMetadataManager(brokerId: Int,
           val timestampType = TimestampType.CREATE_TIME
           val timestamp = time.milliseconds()
 
+          /**
+           * 这里把用户提交的offset，构建成一个record
+           * */
           val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) =>
             val key = GroupMetadataManager.offsetCommitKey(group.groupId, topicPartition)
             val value = GroupMetadataManager.offsetCommitValue(offsetAndMetadata, interBrokerProtocolVersion)
@@ -385,6 +394,10 @@ class GroupMetadataManager(brokerId: Int,
           records.foreach(builder.append)
           val entries = Map(offsetTopicPartition -> builder.build())
 
+          /**
+           *  下面的注释，就告诉了我们offset的插入顺序，先插入log，再插入cache
+           *  set the callback function to insert offsets into cache after log append completed
+           */
           // set the callback function to insert offsets into cache after log append completed
           def putCacheCallback(responseStatus: Map[TopicPartition, PartitionResponse]): Unit = {
             // the append response should only contain the topics partition
@@ -406,7 +419,7 @@ class GroupMetadataManager(brokerId: Int,
                     if (isTxnOffsetCommit)
                       group.onTxnOffsetCommitAppend(producerId, topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata))
                     else
-                      group.onOffsetCommitAppend(topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata))
+                      group.onOffsetCommitAppend(topicPartition, CommitRecordMetadataAndOffset(Some(status.baseOffset), offsetAndMetadata)) //这里是放到cache里面
                   }
                 }
                 Errors.NONE
@@ -526,6 +539,16 @@ class GroupMetadataManager(brokerId: Int,
   }
 
   /**
+   * 这个方法的作用已经说了：异步读该partition的数据从offset topic中，并且放入cache中.
+   *
+   * 异步是怎么做到的呢？通过KafkaScheduler来做到的。
+   *
+   * 其实在传入的onGroupLoaded函数中就已经做了加载offset数据到cache的事了，那么为什么这里还要再包一层呢？
+   * 主要是为了两件事：
+   * ①记录正在load加载的tp，当然记录正在加载这个动作可以放到onGroupLoaded中去做，好像也是可以得，
+   * 但是这样没那么及时标记吧，如果没有触发schedule，那这段时间 就判断是没在load，似乎不合适，其实也是在load过程，只是在等待.撤销标记这个动作是在onGroupLoaded中做的，完成后撤销。
+   * ②异步加载。
+   *
    * Asynchronously read the partition from the offsets topic and populate the cache
    */
   def scheduleLoadGroupAndOffsets(offsetsPartition: Int, onGroupLoaded: GroupMetadata => Unit): Unit = {
@@ -565,10 +588,14 @@ class GroupMetadataManager(brokerId: Int,
    * */
   private[group] def loadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit, startTimeMs: java.lang.Long): Unit = {
     try {
+      /**
+       * 这里schedulerTimeMs应该是从开始出发到真正调用该方法的等待时间，或者叫调度时间
+       * schedulerTimeMs  拆开理解 scheduler（调度）  TimeMs（时间）
+       * */
       val schedulerTimeMs = time.milliseconds() - startTimeMs
       debug(s"Started loading offsets and group metadata from $topicPartition")
       /**
-       * 这个onGroupLoaded方法很有意思，传递了好几次，都没真正调用。
+       * 这个onGroupLoaded方法很有意思，传递了好几次，都没真正调用。为啥要传这么多次呢
        * 在onElection方法中传入    groupManager.scheduleLoadGroupAndOffsets(offsetTopicPartitionId, onGroupLoaded)
        * 然后传入      scheduler.schedule(topicPartition.toString, () => loadGroupsAndOffsets(topicPartition, onGroupLoaded, startTimeMs))
        * */
@@ -576,6 +603,10 @@ class GroupMetadataManager(brokerId: Int,
       val endTimeMs = time.milliseconds()
       val totalLoadingTimeMs = endTimeMs - startTimeMs
       partitionLoadSensor.record(totalLoadingTimeMs.toDouble, endTimeMs, false)
+
+      /**
+       * 这个注释的意思是某个tp完成offset 加载，总耗时多少，调度耗时多少。
+       * */
       info(s"Finished loading offsets and group metadata from $topicPartition "
         + s"in $totalLoadingTimeMs milliseconds, of which $schedulerTimeMs milliseconds"
         + s" was spent in the scheduler.")

@@ -1392,6 +1392,12 @@ class KafkaController(val config: KafkaConfig,
     /**
      * forKeyValue这个方法是kafka自己写的，似乎是利用了scala的implicit (隐式参数)关键字，就可以注入到一些已经存在的类和方法上。
      * 这里不是特别懂，为啥preferredReplicasForTopicsByBrokers是scala的Map类，但是没有forKeyValue方法，这里居然可以调用到。
+     * 因为上面import的时候有这样一个导入：
+     * import kafka.utils.Implicits._
+     * scala的隐式参数机制就是scala在编译遇到类型异常的时候，会试着去寻找隐式参数类型的方法来修复，这里就找到了kafka.utils.Implicits._下面的MapExtensionMethods类。
+     * 其实有个问题，我们看到MapExtensionMethods类有个注释标签： @nowarn("cat=unused-imports")  ，意思是不需要import就可以使用？我把import kafka.utils.Implicits._注释掉看看，
+     * 结果发现forKeyValue报错，果然不能使用。也就是说这个注释标签并不是说不需要import就可以使用，应该意思是 不使用的话 ，不要import
+     * 这里是scala隐式参数机制的应用场景，关于scala隐式参数讲解可以参考：https://www.jianshu.com/p/1d119c937015
      * */
     // for each broker, check if a preferred replica election needs to be triggered
     preferredReplicasForTopicsByBrokers.forKeyValue { (leaderBroker, topicPartitionsForBroker) =>

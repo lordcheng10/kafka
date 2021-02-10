@@ -890,6 +890,9 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  /***
+   * 没看到有加载的地方啊
+   * */
   private def onGroupLoaded(group: GroupMetadata): Unit = {
     group.inLock {
       info(s"Loading group metadata for ${group.groupId} with generation ${group.generationId}")
@@ -914,7 +917,13 @@ class GroupCoordinator(val brokerId: Int,
   }
 
   /**
+   *
+   * 其实下面的注释已经告诉你这个方法的作用了：
+   * 从给定分区加载缓存状态，并开始处理映射到该分区的组的请求。
+   *
    * Load cached state from the given partition and begin handling requests for groups which map to it.
+   *
+   * offsetTopicPartitionId：是consumer offset这个topic的某个partitionId。注释的意思是：正在切换为leader的tp。
    *
    * @param offsetTopicPartitionId The partition we are now leading
    */
@@ -926,6 +935,9 @@ class GroupCoordinator(val brokerId: Int,
      * offsetTopicPartitionId 参数是成为group coordinator partition leader的brokerId。
      *
      * coordinator意思是协调员，group的协调员。
+     *
+     * 下面日志的意思是：Elected as the group coordinator for partition （该tp被选举为group协调员。）
+     *
      * */
     info(s"Elected as the group coordinator for partition $offsetTopicPartitionId")
     groupManager.scheduleLoadGroupAndOffsets(offsetTopicPartitionId, onGroupLoaded)
@@ -1321,6 +1333,13 @@ class GroupCoordinator(val brokerId: Int,
 
   def partitionFor(group: String): Int = groupManager.partitionFor(group)
 
+  /**
+   * groupIsOverCapacity : 首先看方法名group Is Over（超过） Capacity（容量）
+   * kafka对每个group做了内存上限限制，通过group.max.size可以配置，默认是Int.MaxValue ，也就是2G。
+   * 当某个group加载到内存的大小超过阈值后，会触发rebalance，为啥要rebalance呢？
+   * 看rebalance原因写的似乎是为了触发提交一次offset，难道是要情况cache里该group的offset数据，所以让客户端在提交一次新的好保留？感觉应该是，那么问题来了，在哪里触发的清空逻辑
+   * prepareRebalance(group, s"Freshly-loaded group is over capacity ($groupConfig.groupMaxSize). Rebalacing in order to give a chance for consumers to commit offsets")
+   * */
   private def groupIsOverCapacity(group: GroupMetadata): Boolean = {
     group.size > groupConfig.groupMaxSize
   }

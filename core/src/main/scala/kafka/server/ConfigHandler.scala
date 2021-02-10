@@ -105,7 +105,7 @@ class TopicConfigHandler(private val logManager: LogManager, kafkaConfig: KafkaC
     configValue match {
       case "" => Seq()
       case "*" => AllReplicas
-      case _ => configValue.trim
+      case _ => configValue.trim //上面刚trim过，这里又trim多余了
         .split(",")
         .map(_.split(":"))
         .filter(_ (1).toInt == brokerId) //Filter this replica
