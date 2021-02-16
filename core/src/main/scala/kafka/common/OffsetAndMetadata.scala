@@ -19,6 +19,14 @@ package kafka.common
 
 import java.util.Optional
 
+
+/**
+ * offset: 就是用户提交的offset
+ * leaderEpoch：leader版本号
+ * metadata：这个变量是string类型，到底拿来干啥的呢
+ * commitTimestamp：提交的时间
+ * expireTimestamp：过期的时间
+ * */
 case class OffsetAndMetadata(offset: Long,
                              leaderEpoch: Optional[Integer],
                              metadata: String,

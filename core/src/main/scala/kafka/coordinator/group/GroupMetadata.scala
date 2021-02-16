@@ -256,6 +256,8 @@ case class GroupSummary(state: String,
                         members: List[MemberSummary])
 
 /**
+ *  OffsetAndMetadata 类是什么意思？
+ *
   * We cache offset commits along with their commit record offset. This enables us to ensure that the latest offset
   * commit is always materialized when we have a mix of transactional and regular offset commits. Without preserving
   * information of the commit record offset, compaction of the offsets topic itself may result in the wrong offset commit

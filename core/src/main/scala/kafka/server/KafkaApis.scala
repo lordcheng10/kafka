@@ -303,6 +303,13 @@ class KafkaApis(val requestChannel: RequestChannel,
      * 这里就涉及到kafka的协议格式了,参考：https://www.iteblog.com/archives/2217.html
      *
      * 大致就是 request 分为header和body，body才是类似LeaderAndIsrRequest这种对象
+     *
+     *
+     * 这里的bodu方法实际只是做一个类型检查，在每个request类中都有一个：
+     * private val bodyAndSize: RequestAndSize = context.parseRequest(buffer)
+     *
+     * 也就是说在服务端构建Request类对象的时候，就已经解析好了 对应的request对象和size，并赋值给了bodyAndSize，然后在body方法中只是做个类型检查，
+     * 检查该request对象是否是指定的子类型对象。
      * */
     val leaderAndIsrRequest = request.body[LeaderAndIsrRequest]
 

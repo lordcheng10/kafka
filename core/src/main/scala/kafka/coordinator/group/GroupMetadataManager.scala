@@ -625,13 +625,16 @@ class GroupMetadataManager(brokerId: Int,
   }
 
   /**
-   * 这里才是实际加载offset元数据
+   * 这里才是实际加载offset元数据,
+   * 看了下，似乎是读取了磁盘log数据后放入到了pendingOffsets中，然后怎么处理就不太清楚了
    * */
   private def doLoadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit): Unit = {
     def logEndOffset: Long = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
 
     /**
-     * 找到对应partition副本log
+     * 找到对应partition副本log。
+     * 那么问题来了这个partition是怎么找到的？做leader and isr请求处理的时候，请求里面就有tp，
+     * 然后如果这些tp涉及的是offset这个topic，那么就会触发从磁盘加载逻辑.
      * */
     replicaManager.getLog(topicPartition) match {
       case None =>
@@ -640,7 +643,10 @@ class GroupMetadataManager(brokerId: Int,
       case Some(log) =>
         /**
          * 这几个变量什么作用?
-         * loadedOffsets: key是 group名+ topicPartition ，value是
+         * 看起来这几个变量才是关键
+         * loadedOffsets: key是 group名+ topicPartition ，value是CommitRecordMetadataAndOffset
+         *
+         * 那么问题来了，CommitRecordMetadataAndOffset类是什么意思
          * */
         val loadedOffsets = mutable.Map[GroupTopicPartition, CommitRecordMetadataAndOffset]()
         val pendingOffsets = mutable.Map[Long, mutable.Map[GroupTopicPartition, CommitRecordMetadataAndOffset]]()

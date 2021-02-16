@@ -158,6 +158,9 @@ object RequestChannel extends Logging {
       s"$forwardDescription$header -- ${loggableRequest.toString(details)}"
     }
 
+    /**
+     * 这属于Scala泛型中的知识：上边界和下边界。上边界是“<:”，下边界是“>:”；T <: AbstractRequest：T必须是AbstractRequest的子类。
+     * */
     def body[T <: AbstractRequest](implicit classTag: ClassTag[T], @nowarn("cat=unused") nn: NotNothing[T]): T = {
       bodyAndSize.request match {
         case r: T => r
