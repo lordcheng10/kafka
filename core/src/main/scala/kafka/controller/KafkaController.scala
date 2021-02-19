@@ -265,10 +265,12 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
     // before reading source of truth from zookeeper, register the listeners to get broker/topic callbacks
     registerPartitionReassignmentListener()
     registerIsrChangeNotificationListener()
+
     registerPreferredReplicaElectionListener()
     registerTopicChangeListener()
     registerTopicDeletionListener()
     registerBrokerChangeListener()
+
 
     initializeControllerContext()
     val (topicsToBeDeleted, topicsIneligibleForDeletion) = fetchTopicDeletionsInProgress()
@@ -1125,8 +1127,14 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
     controllerContext.partitionReplicaAssignment = zkUtils.getReplicaAssignmentForTopics(controllerContext.allTopics.toSeq)
     controllerContext.partitionLeadershipInfo = new mutable.HashMap[TopicAndPartition, LeaderIsrAndControllerEpoch]
     controllerContext.shuttingDownBrokerIds = mutable.Set.empty[Int]
+
+    /**
+     * controller切换时，线上集群发现花费了一分多钟，怀疑主要是耗费在这里，因为tp多，这个方法里面是按照tp来循环遍历的。
+     * 具体分析：http://note.youdao.com/s/32zJQb5K
+     * */
     // update the leader and isr cache for all existing partitions from Zookeeper
     updateLeaderAndIsrCache()
+
     // start the channel manager
     startChannelManager()
     initializePartitionReassignment()
@@ -1212,6 +1220,10 @@ class KafkaController(val config: KafkaConfig, zkUtils: ZkUtils, time: Time, met
     controllerContext.controllerChannelManager.startup()
   }
 
+  /**
+   * controller切换时，线上集群发现花费了一分多钟，怀疑主要是耗费在这里，因为tp多，这个方法里面是按照tp来循环遍历的。
+   * 具体分析：http://note.youdao.com/s/32zJQb5K
+   * */
   def updateLeaderAndIsrCache(topicAndPartitions: Set[TopicAndPartition] = controllerContext.partitionReplicaAssignment.keySet) {
     val leaderAndIsrInfo = zkUtils.getPartitionLeaderAndIsrForTopics(topicAndPartitions)
     for ((topicPartition, leaderIsrAndControllerEpoch) <- leaderAndIsrInfo)
