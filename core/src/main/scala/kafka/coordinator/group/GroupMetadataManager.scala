@@ -629,6 +629,12 @@ class GroupMetadataManager(brokerId: Int,
    * 看了下，似乎是读取了磁盘log数据后放入到了pendingOffsets中，然后怎么处理就不太清楚了
    * */
   private def doLoadGroupsAndOffsets(topicPartition: TopicPartition, onGroupLoaded: GroupMetadata => Unit): Unit = {
+    /**
+     * 这个方法获取对应传入tp的leo，没有的话就是-1.
+     * 这里为啥要获取对应tp的leo呢？
+     *
+     * 注意这里的getLogEndOffset方法只是获取本地是leader的tp的leo，如果不是leader最终就为-1
+     * */
     def logEndOffset: Long = replicaManager.getLogEndOffset(topicPartition).getOrElse(-1L)
 
     /**
@@ -653,11 +659,16 @@ class GroupMetadataManager(brokerId: Int,
         val loadedGroups = mutable.Map[String, GroupMetadata]()
         val removedGroups = mutable.Set[String]()
 
+        /**
+         * 下面注释意思是说，buffer可能并不需要，如果是直接从内存中读取的话。
+         * */
         // buffer may not be needed if records are read from memory
         var buffer = ByteBuffer.allocate(0)
 
         /**
-         * 从最早位置开始加载数据
+         * 从最早位置开始加载数据。
+         * 下面的注释告诉我们，一旦leader发生切换，那么下面的while循环就会break退出，
+         * 因为while循环的条件在不停调用logEndOffset方法，一旦切换，那么不再是leader了，logEndOffset就返回-1，从而就从while循环中跳出
          * */
         // loop breaks if leader changes at any time during the load, since logEndOffset is -1
         var currOffset = log.logStartOffset

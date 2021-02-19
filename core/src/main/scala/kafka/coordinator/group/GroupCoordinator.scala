@@ -891,7 +891,8 @@ class GroupCoordinator(val brokerId: Int,
   }
 
   /***
-   * 没看到有加载的地方啊
+   * 没看到有加载的地方啊.
+   * 这个方法部署加载offset，似乎只是处理过期心跳的
    * */
   private def onGroupLoaded(group: GroupMetadata): Unit = {
     group.inLock {

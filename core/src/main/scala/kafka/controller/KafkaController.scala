@@ -1088,6 +1088,11 @@ class KafkaController(val config: KafkaConfig,
     (topicsToBeDeleted, topicsIneligibleForDeletion)
   }
 
+  /**
+   * 0.11.0版本的controller切换时，线上发现花费了一分多钟，怀疑主要是耗费在这里，因为tp多，这个updateLeaderAndIsrCache方法里面是按照tp来循环遍历的。
+   * trunk版本不知道会不会有相同问题？
+   * 具体分析：http://note.youdao.com/s/32zJQb5K
+   * */
   private def updateLeaderAndIsrCache(partitions: Seq[TopicPartition] = controllerContext.allPartitions.toSeq): Unit = {
     val leaderIsrAndControllerEpochs = zkClient.getTopicPartitionStates(partitions)
     leaderIsrAndControllerEpochs.forKeyValue { (partition, leaderIsrAndControllerEpoch) =>

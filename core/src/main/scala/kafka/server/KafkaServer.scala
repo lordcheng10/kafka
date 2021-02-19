@@ -704,6 +704,14 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
     try {
       info("shutting down")
 
+      /**
+       * 当调用startup方法的时候，isStartingUp值会设置为true。
+       * 当startup调用完后，isStartingUp值会设置为false。
+       * isStartingUp值默认是false。
+       * 这里检查isStartingUp值，是为了防止正在启动就shutdown，至少需要启动完后，也就是startup方法走完后才能shutdown。
+       *
+       * 为什么要这样做呢？
+       * */
       if (isStartingUp.get)
         throw new IllegalStateException("Kafka server is still starting up, cannot shut down!")
 
@@ -711,7 +719,11 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
       // last in the `if` block. If the order is reversed, we could shutdown twice or leave `isShuttingDown` set to
       // `true` at the end of this method.
       if (shutdownLatch.getCount > 0 && isShuttingDown.compareAndSet(false, true)) {
+        /**
+         * TODO-chenlin 这里可以提个patch,controller shutdown和broker shutdow可以交换下顺序，考虑下一个broker同时是controller的时候 stop，如果先controller shutdow，有可能会导致controller切换耗时过长，从而导致长时间没有完成leader切换。
+         * */
         CoreUtils.swallow(controlledShutdown(), this)
+
         brokerState.newState(BrokerShuttingDown)
 
         if (dynamicConfigManager != null)
