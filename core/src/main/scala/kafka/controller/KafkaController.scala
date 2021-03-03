@@ -509,6 +509,9 @@ class KafkaController(val config: KafkaConfig,
   }
 
   /**
+   *   controller感知到broker启动后，到底做了哪些事情？
+   *
+   *
    * 主要是做两件事：
    * ①发送metadata请求；
    * ②处理新增broker上对应的副本，主要包括：副本状态变更、leader选举、判断ressign副本、topic删除操作判断；
@@ -548,6 +551,11 @@ class KafkaController(val config: KafkaConfig,
      * 这样做目的是:为了防止给newBrokersSet和liveOrShuttingDownBrokerIds交集的broker发送两次metadata.
      * */
     val existingBrokers = controllerContext.liveOrShuttingDownBrokerIds.diff(newBrokersSet)
+
+    /**
+     * 其实下面的注释已经说得很清楚了：发送更新metadata请求给该集群的所有broker，以便通过这个更新，他们知道这些新的brokers。
+     * 在这个请求中，不需要包含任何partition状态，因为这里没有任何partition状态改变（broker启动，即便上面有partiton，那也是follower，启动前后状态没有变化，即便要进队也要等追上进队后）
+     * */
     // Send update metadata request to all the existing brokers in the cluster so that they know about the new brokers
     // via this update. No need to include any partition states in the request since there are no partition state changes.
     /**
@@ -555,6 +563,11 @@ class KafkaController(val config: KafkaConfig,
      * 0.11.0版本是给liveOrShuttingDownBrokerIds中的所有broker发
      * */
     sendUpdateMetadataRequest(existingBrokers.toSeq, Set.empty)
+    /**
+     * 下面的注释解释的很清楚：
+     * 发送更新metadata请求给新broker，并携带一个全量的partiiton状态作为初始化。
+     * 以防controller挂掉时，。。
+     * */
     // Send update metadata request to all the new brokers in the cluster with a full set of partition states for initialization.
     // In cases of controlled shutdown leaders will not be elected when a new broker comes up. So at least in the
     // common controlled shutdown case, the metadata will reach the new brokers faster.
@@ -1304,6 +1317,7 @@ class KafkaController(val config: KafkaConfig,
       /**
        * 需要检查：之前是否有stopReplica、leaderAndIsr、metadata三类请求之前没发送完成。
        * 如果没有发送完，那么不能发新的，这里会抛异常.
+       * 因为controller这里用了单线程事件发送机制，所以不可能出现我要发的时候，上一轮的没发完，所以这里newBatch如果检查到有上一轮没发完的话 会异常跑错
        * */
       brokerRequestBatch.newBatch()
       /**
@@ -1736,6 +1750,11 @@ class KafkaController(val config: KafkaConfig,
 
   private def elect(): Unit = {
     activeControllerId = zkClient.getControllerId.getOrElse(-1)
+    /**
+     * 走到这里说明controller目录有变化，个人理解实际就是controller目录没了，controller挂了或和zk失联了。
+     * 如果没有controller目录了，那么调用getControllerID方法，从zk读取的话，就会返回-1.但如果已经选举出来了，那么此时去调用肯定就不为-1，也就不用再走下面的选举逻辑了
+     * 这里是从zk上去获取controller的ID，如果不等于-1，说明以及选举出来了。那么就直接return，不用再选了
+     * */
     /*
      * We can get here during the initial startup and the handleDeleted ZK callback. Because of the potential race condition,
      * it's possible that the controller has already been elected when we get here. This check will prevent the following
@@ -1745,6 +1764,7 @@ class KafkaController(val config: KafkaConfig,
       debug(s"Broker $activeControllerId has been elected as the controller, so stopping the election process.")
       return
     }
+
 
     try {
       val (epoch, epochZkVersion) = zkClient.registerControllerAndIncrementControllerEpoch(config.brokerId)
@@ -1829,6 +1849,9 @@ class KafkaController(val config: KafkaConfig,
      * zk上读取信息构建出broker和epoch映射的变量curBrokerAndEpochs -> curBrokerAndEpochs构建出brokerId和epoch映射的变量 -> 从curBrokerIdAndEpochs构建出当前的broker id集合：curBrokerIds
      *
      * liveOrShuttingDownBrokerIds是直接从controllerContext.liveOrShuttingDownBrokerIds中引用而来。
+     *
+     * curBrokerAndEpochs： 当前broker和 epoch 版本号
+     *
      * */
     val curBrokerAndEpochs = zkClient.getAllBrokerAndEpochsInCluster
     val curBrokerIdAndEpochs = curBrokerAndEpochs map { case (broker, epoch) => (broker.id, epoch) }
@@ -1846,6 +1869,8 @@ class KafkaController(val config: KafkaConfig,
      * 意思就是找出类似broker挂掉，瞬间拉起的broker
      * 这个处理方法我们主要处理三类broker：新增的、挂掉的、epoch变大的(比如：宕机瞬间拉起的broker)。
      * 哪这样的话，0.11.0版本不就少处理了一类broker吗
+     *
+     * bouncedBrokerIds：名字解释来看 bounced(弹起，反弹) BrokerIds    ，意思是反弹(挂掉瞬间拉起的)的broker列表
      * */
     val bouncedBrokerIds = (curBrokerIds & liveOrShuttingDownBrokerIds)
       .filter(brokerId => curBrokerIdAndEpochs(brokerId) > controllerContext.liveBrokerIdAndEpochs(brokerId))

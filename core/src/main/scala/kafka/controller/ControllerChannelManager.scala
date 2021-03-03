@@ -643,6 +643,9 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
 
 
     updateMetadataRequestBrokerSet ++= brokerIds.filter(_ >= 0)
+    /**
+     * broker启动触发调用该方法的话，传入的partitions为空集合，也就是说如果是感知到broker启动的话，下面的partition变化这一步不会走
+     * */
     partitions.foreach(partition => updateMetadataRequestPartitionInfo(partition,
       beingDeleted = controllerContext.topicsToBeDeleted.contains(partition.topic)))
   }

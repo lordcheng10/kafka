@@ -134,6 +134,9 @@ object LogConfig {
   val CleanupPolicyProp = TopicConfig.CLEANUP_POLICY_CONFIG
   val Delete = TopicConfig.CLEANUP_POLICY_DELETE
   val Compact = TopicConfig.CLEANUP_POLICY_COMPACT
+  /**
+   * unclean.leader.election.enable  这个配置到底是什么含义
+   * */
   val UncleanLeaderElectionEnableProp = TopicConfig.UNCLEAN_LEADER_ELECTION_ENABLE_CONFIG
   val MinInSyncReplicasProp = TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG
   val CompressionTypeProp = TopicConfig.COMPRESSION_TYPE_CONFIG

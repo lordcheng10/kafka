@@ -29,6 +29,9 @@ object KafkaServerStartable {
     fromProps(serverProps, None)
   }
 
+  /**
+   * 写了这个方法为什么不用这个方法，这样可以设置主线程名
+   * */
   def fromProps(serverProps: Properties, threadNamePrefix: Option[String]): KafkaServerStartable = {
     val reporters = KafkaMetricsReporter.startReporters(new VerifiableProperties(serverProps))
     new KafkaServerStartable(KafkaConfig.fromProps(serverProps, false), reporters, threadNamePrefix)

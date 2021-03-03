@@ -489,6 +489,17 @@ class ZkPartitionStateMachine(config: KafkaConfig,
         config.originals()
       )
 
+      /**
+       * 这里把isr中没有活着broker的partiiton集合进行处理，这里面的partition分为两类：①属于failed集合的（failed集合是啥？）②其他；
+       * unclean.leader.election.enable参数主要是对第2中情况生效，把属于第2中情况的partiiton进行标记，如果这个配置开启了，
+       * 那么这里就标记为true，个人理解代表可以选举的意思吧.
+       * 看了下使用这个方法返回值的地方，true的话就代表从AR中去选举活着的副本。
+       *
+       * 那么这样看unclean.leader.election.enable这个配置就是用来开启是否选举isr外的副本。
+       * 但为啥之前我帮小新（小红书同事）在kafka-manager上单独调整了某个topic的这个配置没生效
+       * （因为这个topic某个partition只有2个副本，其中一个掉队了，另外一个broker是leader，但它自己的parititon集合里没有这个partition，也就是自己认为自己不是leader）
+       * ，然后我通过manager动态修改了这个topic的这个配置，然后跑了prefer leader，并未生效。难道说是触发条件不是prefer？
+       * */
       partitionsWithNoLiveInSyncReplicas.map { case (partition, leaderAndIsr) =>
         if (failed.contains(partition.topic)) {
           logFailedStateChange(partition, partitionState(partition), OnlinePartition, failed(partition.topic))
@@ -532,6 +543,9 @@ class ZkPartitionStateMachine(config: KafkaConfig,
  *  partition leader选举策略类.
  * */
 object PartitionLeaderElectionAlgorithms {
+  /***
+   * uncleanLeaderElectionEnabled 最终在这里生效
+   * */
   def offlinePartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int], uncleanLeaderElectionEnabled: Boolean, controllerContext: ControllerContext): Option[Int] = {
     assignment.find(id => liveReplicas.contains(id) && isr.contains(id)).orElse {
       if (uncleanLeaderElectionEnabled) {

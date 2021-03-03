@@ -223,6 +223,9 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
   }
 
   /**
+   *  启动API来启动Kafka服务器的单个实例。
+   *  实例化LogManager、SocketServer和请求处理程序—KafkaRequestHandlers
+   *  
    * Start up API for bringing up a single instance of the Kafka server.
    * Instantiates the LogManager, the SocketServer and the request handlers - KafkaRequestHandlers
    */

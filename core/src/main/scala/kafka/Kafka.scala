@@ -30,10 +30,16 @@ import scala.jdk.CollectionConverters._
 object Kafka extends Logging {
 
   def getPropsFromArgs(args: Array[String]): Properties = {
+    /**
+     * OptionParser 是jopt-simple命令行解析框架里面的类，和JCommander框架类似，pulsar的命令行参数解析就是用的JCommander框架，而kafka用的jopt-simple框架
+     * */
     val optionParser = new OptionParser(false)
     val overrideOpt = optionParser.accepts("override", "Optional property that should override values set in server.properties file")
       .withRequiredArg()
       .ofType(classOf[String])
+    /**
+     *
+     * */
     // This is just to make the parameter show up in the help output, we are not actually using this due the
     // fact that this class ignores the first parameter which is interpreted as positional and mandatory
     // but would not be mandatory if --version is specified
@@ -65,10 +71,25 @@ object Kafka extends Logging {
 
   def main(args: Array[String]): Unit = {
     try {
+      /**
+       * 根据参数加载Prop配置
+       * */
       val serverProps = getPropsFromArgs(args)
+      /**
+       * 根据Prop配置来构造一个kafkaServerStartable类对象实例
+       * */
       val kafkaServerStartable = KafkaServerStartable.fromProps(serverProps)
 
       try {
+        /**
+         * 如果不是windows操作系统，看起来这里会做一些日志相关的操作：
+         * 那么这个到底是在干啥呢：
+         * new LoggingSignalHandler().register()
+         *
+         * 以及Java.isIbmJdk又是啥?
+         *
+         *
+         * */
         if (!OperatingSystem.IS_WINDOWS && !Java.isIbmJdk)
           new LoggingSignalHandler().register()
       } catch {
@@ -77,10 +98,19 @@ object Kafka extends Logging {
             s"by a signal. Reason for registration failure is: $e", e)
       }
 
+      /**
+       * 这里是添加一个shutdown hook
+       * */
       // attach shutdown handler to catch terminating signals as well as normal termination
       Exit.addShutdownHook("kafka-shutdown-hook", kafkaServerStartable.shutdown())
 
+      /**
+       * 这里开始启动服务
+       * */
       kafkaServerStartable.startup()
+      /**
+       * 这里wait 服务shutdown
+       * */
       kafkaServerStartable.awaitShutdown()
     }
     catch {
