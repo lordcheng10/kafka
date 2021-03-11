@@ -31,14 +31,16 @@ object Kafka extends Logging {
 
   def getPropsFromArgs(args: Array[String]): Properties = {
     /**
-     * OptionParser 是jopt-simple命令行解析框架里面的类，和JCommander框架类似，pulsar的命令行参数解析就是用的JCommander框架，而kafka用的jopt-simple框架
+     * OptionParser 是jopt-simple命令行解析框架里面的类，和JCommander框架类似，
+     * pulsar的命令行参数解析就是用的JCommander框架，而kafka用的jopt-simple框架,flink使用的是Apache Commons CLI
      * */
     val optionParser = new OptionParser(false)
     val overrideOpt = optionParser.accepts("override", "Optional property that should override values set in server.properties file")
       .withRequiredArg()
       .ofType(classOf[String])
+
     /**
-     *
+     * 这里是打印版本信息，并退出
      * */
     // This is just to make the parameter show up in the help output, we are not actually using this due the
     // fact that this class ignores the first parameter which is interpreted as positional and mandatory
@@ -46,24 +48,42 @@ object Kafka extends Logging {
     // This is a bit of an ugly crutch till we get a chance to rework the entire command line parsing
     optionParser.accepts("version", "Print version information and exit.")
 
+    /**
+     * 如果参数个数为0，或者参数传入了--help就打印出参数用法
+     * */
     if (args.length == 0 || args.contains("--help")) {
       CommandLineUtils.printUsageAndDie(optionParser,
         "USAGE: java [options] %s server.properties [--override property=value]*".format(this.getClass.getCanonicalName.split('$').head))
     }
 
+    /**
+     * 如果传入了版本信息，就打印版本信息。
+     * */
     if (args.contains("--version")) {
       CommandLineUtils.printVersionAndDie()
     }
 
+    /**
+     * 这里是读取server.properties配置文件，然后构建出props。
+     * */
     val props = Utils.loadProps(args(0))
 
+    /**
+     * 如果参数个数大于1，那么就说明传入了额外的key和value配置吧
+     * */
     if (args.length > 1) {
       val options = optionParser.parse(args.slice(1, args.length): _*)
 
+      /**
+       * 这里好像是检查不符合要求的参数个数，如果大于0  就打印用法
+       * */
       if (options.nonOptionArguments().size() > 0) {
         CommandLineUtils.printUsageAndDie(optionParser, "Found non argument parameters: " + options.nonOptionArguments().toArray.mkString(","))
       }
 
+      /**
+       * 这里似乎是可以在启动的时候，传入一些配置key=value 来修改配置文件里的配置项？
+       * */
       props ++= CommandLineUtils.parseKeyValueArgs(options.valuesOf(overrideOpt).asScala)
     }
     props
@@ -72,11 +92,13 @@ object Kafka extends Logging {
   def main(args: Array[String]): Unit = {
     try {
       /**
-       * 根据参数加载Prop配置
+       * 根据参数加载Prop配置,
+       * 主要就是根据传入的server.properties路径 然后加载到serverProps中
        * */
       val serverProps = getPropsFromArgs(args)
       /**
-       * 根据Prop配置来构造一个kafkaServerStartable类对象实例
+       * 根据Prop配置来构造一个kafkaServerStartable类对象实例.
+       * KafkaServerStartable 这个是主要的逻辑。
        * */
       val kafkaServerStartable = KafkaServerStartable.fromProps(serverProps)
 
@@ -87,8 +109,6 @@ object Kafka extends Logging {
          * new LoggingSignalHandler().register()
          *
          * 以及Java.isIbmJdk又是啥?
-         *
-         *
          * */
         if (!OperatingSystem.IS_WINDOWS && !Java.isIbmJdk)
           new LoggingSignalHandler().register()
