@@ -23,6 +23,7 @@ import joptsimple.{OptionParser, OptionSet, OptionSpec}
 import scala.collection.Set
 
 /**
+ *  注释翻译：处理命令行实用程序的辅助函数
   * Helper functions for dealing with command line utilities
   */
 object CommandLineUtils extends Logging {

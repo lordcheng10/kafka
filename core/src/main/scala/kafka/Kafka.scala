@@ -27,14 +27,25 @@ import org.apache.kafka.common.utils.{Java, LoggingSignalHandler, OperatingSyste
 
 import scala.jdk.CollectionConverters._
 
+/**
+ * Kafka也就两个方法：①getPropsFromArgs；②main
+ * */
 object Kafka extends Logging {
 
+
+  /**
+   * 这个方法主要是从配置文件server.properties加载配置，另外对于启动时，通过--override传入的，用来覆盖server.properties文件里的配置的额外配置项，也会在这里加载并覆盖文件里的配置项。
+   * */
   def getPropsFromArgs(args: Array[String]): Properties = {
     /**
      * OptionParser 是jopt-simple命令行解析框架里面的类，和JCommander框架类似，
      * pulsar的命令行参数解析就是用的JCommander框架，而kafka用的jopt-simple框架,flink使用的是Apache Commons CLI
      * */
     val optionParser = new OptionParser(false)
+    /**
+     * 可选属性，应该覆盖在服务器属性文件中设置的值。可以在启动的时候这样覆盖：
+     * sh kafka-server-start.sh  ../config/server.properties  --override zookeeper.connection.timeout.ms=111 --override zookeeper.connect=127.0.0.1:2181
+     * */
     val overrideOpt = optionParser.accepts("override", "Optional property that should override values set in server.properties file")
       .withRequiredArg()
       .ofType(classOf[String])
@@ -69,7 +80,7 @@ object Kafka extends Logging {
     val props = Utils.loadProps(args(0))
 
     /**
-     * 如果参数个数大于1，那么就说明传入了额外的key和value配置吧
+     * 如果参数个数大于1，那么就说明传入了额外的key和value配置吧 那么就会从overrideOpt中读取额外的覆盖配置。
      * */
     if (args.length > 1) {
       val options = optionParser.parse(args.slice(1, args.length): _*)
@@ -82,7 +93,10 @@ object Kafka extends Logging {
       }
 
       /**
-       * 这里似乎是可以在启动的时候，传入一些配置key=value 来修改配置文件里的配置项？
+       * 这里似乎是可以在启动的时候，传入一些配置key=value 来修改配置文件里的配置项？ 是的，修改方式是在启动的时候，比如：
+       * sh kafka-server-start.sh  ../config/server.properties  --override zookeeper.connection.timeout.ms=111 --override zookeeper.connect=127.0.0.1:2181
+       *
+       * 传入的--override项，会存到overrideOpt中，然后在这里利用命令行解析工具进行解析.
        * */
       props ++= CommandLineUtils.parseKeyValueArgs(options.valuesOf(overrideOpt).asScala)
     }
