@@ -28,6 +28,15 @@ import scala.collection.mutable.ArrayBuffer
 
 
 /**
+ * KafkaMetricsReporterMBean 这个类是干啥的？
+ * 1.首先从注释看：报告MBean的基本特质类。如果客户端想要公开这些JMX操作，
+ *   可以通过一个自定义的reporter(这个实现了kafka.metrics.KafkaMetricsReporter接口)；这个自定义的reporter需要额外实现一个MBean特质类，这样注册的MBean符合标准的MBean约定。
+ *
+ * 喔，我明白了 ，类似KafkaCSVMetricsReporter这个实现类，当调用startReporter后，
+ * 会在底层有个schedule线程池，定期把metric刷到本地csv文件中，然后我们再通过采集csv文件来进行打点。
+ *
+ *
+ *
  * Base trait for reporter MBeans. If a client wants to expose these JMX
  * operations on a custom reporter (that implements
  * [[kafka.metrics.KafkaMetricsReporter]]), the custom reporter needs to

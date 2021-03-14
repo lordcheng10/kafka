@@ -24,6 +24,11 @@ import kafka.utils.{Exit, Logging, VerifiableProperties}
 
 import scala.collection.Seq
 
+/**
+ * 这静态的KafkaServerStartable类提供了两个接口，实际都是一个接口，区别在与是否要给定主线程名。
+ * 然后主要功能就是根据传入的配置项，构建KafkaServerStartable对象。
+ *
+ * */
 object KafkaServerStartable {
   def fromProps(serverProps: Properties): KafkaServerStartable = {
     fromProps(serverProps, None)
@@ -33,6 +38,10 @@ object KafkaServerStartable {
    * 写了这个方法为什么不用这个方法，这样可以设置主线程名
    * */
   def fromProps(serverProps: Properties, threadNamePrefix: Option[String]): KafkaServerStartable = {
+    /**
+     * KafkaMetricsReporter这个类到底是干啥的
+     *
+     * */
     val reporters = KafkaMetricsReporter.startReporters(new VerifiableProperties(serverProps))
     new KafkaServerStartable(KafkaConfig.fromProps(serverProps, false), reporters, threadNamePrefix)
   }
