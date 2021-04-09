@@ -284,6 +284,10 @@ public class Fetcher<K, V> implements Closeable {
                                         fetchTarget.id());
                                 return;
                             }
+                            /**
+                             * 这里感觉会不会有bug哟。。，直接return，
+                             * 前面会不会死等response
+                             * */
                             if (!handler.handleResponse(response)) {
                                 return;
                             }
