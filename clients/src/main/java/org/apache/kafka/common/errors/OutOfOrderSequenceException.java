@@ -17,6 +17,9 @@
 package org.apache.kafka.common.errors;
 
 /**
+ *
+ * 是一个事务相关的异常，应该是乱序，比如期待收到的消息id是3，结果收到了8，那么是否是预示着消息丢失
+ *
  * This exception indicates that the broker received an unexpected sequence number from the producer,
  * which means that data may have been lost. If the producer is configured for idempotence only (i.e.
  * if <code>enable.idempotence</code> is set and no <code>transactional.id</code> is configured), it
