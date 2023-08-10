@@ -1142,36 +1142,50 @@ class KafkaApis(val requestChannel: RequestChannel,
     sendResponseMaybeThrottle(request, createResponse)
   }
 
+  /**
+   * 1.事务coordinator：不支持;
+   * 2.正常coordinator：支持
+   * 3.限速: 不支持;
+   * 4.鉴权:不支持;
+   * */
   def handleFindCoordinatorRequest(request: RequestChannel.Request) {
+    // 将body转成FindCoordinatorRequest对象
     val findCoordinatorRequest = request.body[FindCoordinatorRequest]
 
+    // 如果findCoordinator请求是group类型，那么就检查下该group是否有权限
     if (findCoordinatorRequest.coordinatorType == FindCoordinatorRequest.CoordinatorType.GROUP &&
         !authorize(request.session, Describe, Resource(Group, findCoordinatorRequest.coordinatorKey, LITERAL)))
-      sendErrorResponseMaybeThrottle(request, Errors.GROUP_AUTHORIZATION_FAILED.exception)
+      sendErrorResponseMaybeThrottle(request, Errors.GROUP_AUTHORIZATION_FAILED.exception)//发送一个权限校验错误的错误码给客户端
     else if (findCoordinatorRequest.coordinatorType == FindCoordinatorRequest.CoordinatorType.TRANSACTION &&
         !authorize(request.session, Describe, Resource(TransactionalId, findCoordinatorRequest.coordinatorKey, LITERAL)))
-      sendErrorResponseMaybeThrottle(request, Errors.TRANSACTIONAL_ID_AUTHORIZATION_FAILED.exception)
+      sendErrorResponseMaybeThrottle(request, Errors.TRANSACTIONAL_ID_AUTHORIZATION_FAILED.exception)//如果是transaction的请求，那么就校验下该transactionId是否有权限
     else {
       // get metadata (and create the topic if necessary)
       val (partition, topicMetadata) = findCoordinatorRequest.coordinatorType match {
         case FindCoordinatorRequest.CoordinatorType.GROUP =>
+          // 如果是group类型的请求，那么就计算对应的consumer offset分区
           val partition = groupCoordinator.partitionFor(findCoordinatorRequest.coordinatorKey)
+          // 获取consumer offset的metadata，如果不存在那么就创建
           val metadata = getOrCreateInternalTopic(GROUP_METADATA_TOPIC_NAME, request.context.listenerName)
           (partition, metadata)
 
         case FindCoordinatorRequest.CoordinatorType.TRANSACTION =>
+          // 如果是事务，那么就解析出事务topic的分区和topic元数据
           val partition = txnCoordinator.partitionFor(findCoordinatorRequest.coordinatorKey)
           val metadata = getOrCreateInternalTopic(TRANSACTION_STATE_TOPIC_NAME, request.context.listenerName)
           (partition, metadata)
 
         case _ =>
+          // 如果都不是上面两种类型，那么就返回invalid request异常
           throw new InvalidRequestException("Unknown coordinator type in FindCoordinator request")
       }
 
+      // 创建一个response
       def createResponse(requestThrottleMs: Int): AbstractResponse = {
-        val responseBody = if (topicMetadata.error != Errors.NONE) {
+        val responseBody = if (topicMetadata.error != Errors.NONE) {// 如果错误码不为NONE,那么就返回一个not avalable异常
           new FindCoordinatorResponse(requestThrottleMs, Errors.COORDINATOR_NOT_AVAILABLE, Node.noNode)
         } else {
+          // 如果不存在错误，那么获取到对应metadata分区的leader节点作为coordinator
           val coordinatorEndpoint = topicMetadata.partitionMetadata.asScala
             .find(_.partition == partition)
             .map(_.leader)
@@ -1179,8 +1193,10 @@ class KafkaApis(val requestChannel: RequestChannel,
 
           coordinatorEndpoint match {
             case Some(endpoint) if !endpoint.isEmpty =>
+              // 如果该endpint存在，那么就返回
               new FindCoordinatorResponse(requestThrottleMs, Errors.NONE, endpoint)
             case _ =>
+              // 如果不存在，那么就返回not available的错误码
               new FindCoordinatorResponse(requestThrottleMs, Errors.COORDINATOR_NOT_AVAILABLE, Node.noNode)
           }
         }
@@ -1188,6 +1204,7 @@ class KafkaApis(val requestChannel: RequestChannel,
           .format(responseBody, request.header.correlationId, request.header.clientId))
         responseBody
       }
+      // 发送response
       sendResponseMaybeThrottle(request, createResponse)
     }
   }
