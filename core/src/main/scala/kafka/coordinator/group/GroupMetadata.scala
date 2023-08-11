@@ -297,10 +297,12 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   }
 
   def supportsProtocols(memberProtocolType: String, memberProtocols: Set[String]) = {
-    if (is(Empty))
+    if (is(Empty))// 如果当前group的状态是empty，那么就检查协议类型和协议是否都不为空，有一个为空，那么就返回false
       !memberProtocolType.isEmpty && memberProtocols.nonEmpty
-    else
+    else {
+      // 如果协议类型相同，并且这个协议支持的成员数和实际成员相等，那么就返回true
       protocolType.contains(memberProtocolType) && memberProtocols.exists(supportedProtocols(_) == members.size)
+    }
   }
 
   def updateMember(member: MemberMetadata,

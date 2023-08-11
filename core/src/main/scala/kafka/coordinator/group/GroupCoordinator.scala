@@ -109,23 +109,33 @@ class GroupCoordinator(val brokerId: Int,
                       protocolType: String,
                       protocols: List[(String, Array[Byte])],
                       responseCallback: JoinCallback): Unit = {
+    // 检查group的状态
     validateGroupStatus(groupId, ApiKeys.JOIN_GROUP).foreach { error =>
+      // 如果有错误的话，那么就回复带有对应错误码的response
       responseCallback(joinError(memberId, error))
       return
     }
 
+    // 检查客户端配置的session超时时间是否小于服务端配置的最小超时时间,默认最小超时时间是6s
     if (sessionTimeoutMs < groupConfig.groupMinSessionTimeoutMs ||
-      sessionTimeoutMs > groupConfig.groupMaxSessionTimeoutMs) {
+      sessionTimeoutMs > groupConfig.groupMaxSessionTimeoutMs) {// 检查是否超过服务端最大的超时时间，服务端最大的超时时间是5分钟
+
+      // 如果客户端配置的参数不合理，那么就回复错误超时的错误码给客户端
       responseCallback(joinError(memberId, Errors.INVALID_SESSION_TIMEOUT))
     } else {
+      // 如果memberId为空字符串，那么就是未知的member
       val isUnknownMember = memberId == JoinGroupRequest.UNKNOWN_MEMBER_ID
+      // 从groupmanager中获取该groupId的metadata信息
       groupManager.getGroup(groupId) match {
-        case None =>
+        case None =>// 如果为none，没有该group
           // only try to create the group if the group is UNKNOWN AND
           // the member id is UNKNOWN, if member is specified but group does not
           // exist we should reject the request.
+          // 仅当组未知并且成员ID未知时才尝试创建组，如果指定了成员但组不存在，我们应该拒绝该请求。
           if (isUnknownMember) {
+            //创建一个group
             val group = groupManager.addGroup(new GroupMetadata(groupId, Empty, time))
+            // 处理未知join
             doUnknownJoinGroup(group, requireKnownMemberId, clientId, clientHost, rebalanceTimeoutMs, sessionTimeoutMs, protocolType, protocols, responseCallback)
           } else {
             responseCallback(joinError(memberId, Errors.UNKNOWN_MEMBER_ID))
@@ -153,6 +163,17 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  /**
+   * 1.group: group的metadata
+   * 2.requireKnownMemberId: 如果协议版本号大于4，那么就必须要求memberId必须提供
+   * 3.clientId: 客户端Id，这个是客户端配置的，如果没配置就是用conumser-前缀后面加自增数字；
+   * 4.clientHost客户端地址
+   * 5.rebalanceTimeoutMs: rebalance超时时间
+   * 6.sessionTimeoutMs: session超时时间
+   * 7.protocolType:协议类型
+   * 8.protocols:有哪些协议
+   * 9.responseCallback: 回复response的callback
+   * */
   private def doUnknownJoinGroup(group: GroupMetadata,
                                  requireKnownMemberId: Boolean,
                                  clientId: String,
@@ -162,25 +183,32 @@ class GroupCoordinator(val brokerId: Int,
                                  protocolType: String,
                                  protocols: List[(String, Array[Byte])],
                                  responseCallback: JoinCallback): Unit = {
-    group.inLock {
-      if (group.is(Dead)) {
+    group.inLock {// 对该group进行加锁
+      if (group.is(Dead)) {// 如果该group处于dead状态,那么直接返回unknown member id
+        // 如果该组被标记为死亡，则意味着其他某个线程刚刚从协调器元数据中删除了该组；
+        // 该组可能已迁移到其他协调器，或者该组处于暂时不稳定阶段。 让成员在没有指定成员 ID 的情况下重试加入。
         // if the group is marked as dead, it means some other thread has just removed the group
         // from the coordinator metadata; it is likely that the group has migrated to some other
         // coordinator OR the group is in a transient unstable phase. Let the member retry
         // joining without the specified member id.
         responseCallback(joinError(JoinGroupRequest.UNKNOWN_MEMBER_ID, Errors.UNKNOWN_MEMBER_ID))
-      } else if (!group.supportsProtocols(protocolType, MemberMetadata.plainProtocolSet(protocols))) {
+      } else if (!group.supportsProtocols(protocolType, MemberMetadata.plainProtocolSet(protocols))) {// 检查是否支持该协议
+        // 如果不支持的话，也会返回INCONSISTENT_GROUP_PROTOCOL异常,该异常不是重试类型的异常
         responseCallback(joinError(JoinGroupRequest.UNKNOWN_MEMBER_ID, Errors.INCONSISTENT_GROUP_PROTOCOL))
       } else {
+        // 新成员的id，在clientId后面加一个随机的uuid
         val newMemberId = clientId + "-" + group.generateMemberIdSuffix
 
-        if (requireKnownMemberId) {
+        if (requireKnownMemberId) {// 如果是高版本，那么就必须要知道memberId，所以还是得报错
+          // 如果需要成员 ID，则在待处理成员列表中注册该成员，并发送回响应以调用具有分配的成员 ID 的另一个加入组请求。
           // If member id required, register the member in the pending member list
           // and send back a response to call for another join group request with allocated member id.
-          group.addPendingMember(newMemberId)
-          addPendingMemberExpiration(group, newMemberId, sessionTimeoutMs)
+          group.addPendingMember(newMemberId)//都回复error response了，为啥要加入到pending member里? 加入到pendding里，是为了让检查过的逻辑不用再检查?
+          addPendingMemberExpiration(group, newMemberId, sessionTimeoutMs)//
+          //回复一个MEMBER_ID_REQUIRED异常的错误码
           responseCallback(joinError(newMemberId, Errors.MEMBER_ID_REQUIRED))
         } else {
+          // 添加成员，并触发rebalance
           addMemberAndRebalance(rebalanceTimeoutMs, sessionTimeoutMs, newMemberId, clientId, clientHost, protocolType,
             protocols, group, responseCallback)
         }
@@ -614,10 +642,12 @@ class GroupCoordinator(val brokerId: Int,
   private def isValidGroupId(groupId: String, api: ApiKeys): Boolean = {
     api match {
       case ApiKeys.OFFSET_COMMIT | ApiKeys.OFFSET_FETCH | ApiKeys.DESCRIBE_GROUPS | ApiKeys.DELETE_GROUPS =>
+        // 为了向后兼容，对于OFFSET_COMMIT、 OFFSET_FETCH、DESCRIBE_GROUPS、DELETE_GROUPS几种api，groupId可以为空串
         // For backwards compatibility, we support the offset commit APIs for the empty groupId, and also
         // in DescribeGroups and DeleteGroups so that users can view and delete state of all groups.
         groupId != null
       case _ =>
+        // 其余API是使用Kafka进行组协调的组，并且必须有一个非空的groupId
         // The remaining APIs are groups using Kafka for group coordination and must have a non-empty groupId
         groupId != null && !groupId.isEmpty
     }
@@ -627,15 +657,15 @@ class GroupCoordinator(val brokerId: Int,
    * Check that the groupId is valid, assigned to this coordinator and that the group has been loaded.
    */
   private def validateGroupStatus(groupId: String, api: ApiKeys): Option[Errors] = {
-    if (!isValidGroupId(groupId, api))
+    if (!isValidGroupId(groupId, api))// 检查groupId是否合法，find coordinator的时候，没有对groupId进行检查，这个没有影响，反正最后会在这里检查出来
       Some(Errors.INVALID_GROUP_ID)
-    else if (!isActive.get)
+    else if (!isActive.get) // 检查是否是活跃状态，该coordinator启动完成后，状态就是活跃的，在shutdown的时候，就是false
       Some(Errors.COORDINATOR_NOT_AVAILABLE)
-    else if (isCoordinatorLoadInProgress(groupId))
+    else if (isCoordinatorLoadInProgress(groupId))//检查是否处于load offset状态
       Some(Errors.COORDINATOR_LOAD_IN_PROGRESS)
-    else if (!isCoordinatorForGroup(groupId))
+    else if (!isCoordinatorForGroup(groupId))// 检查是否是这个coordinator负责的group
       Some(Errors.NOT_COORDINATOR)
-    else
+    else // 如果都没问题
       None
   }
 

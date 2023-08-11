@@ -1244,23 +1244,31 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleJoinGroupRequest(request: RequestChannel.Request) {
+    // 将body转换成为JoinGroupRequest
     val joinGroupRequest = request.body[JoinGroupRequest]
 
+    // 回复response
     // the callback for sending a join-group response
     def sendResponseCallback(joinResult: JoinGroupResult) {
+      // 从join 结果中获取members成员
       val members = joinResult.members map { case (memberId, metadataArray) => (memberId, ByteBuffer.wrap(metadataArray)) }
+      // 创建response
       def createResponse(requestThrottleMs: Int): AbstractResponse = {
+        // 创建一个join group response
         val responseBody = new JoinGroupResponse(requestThrottleMs, joinResult.error, joinResult.generationId,
           joinResult.subProtocol, joinResult.memberId, joinResult.leaderId, members.asJava)
 
         trace("Sending join group response %s for correlation id %d to client %s."
           .format(responseBody, request.header.correlationId, request.header.clientId))
+        // 返回response
         responseBody
       }
+      // 发送response
       sendResponseMaybeThrottle(request, createResponse)
     }
 
     if (!authorize(request.session, Read, Resource(Group, joinGroupRequest.groupId(), LITERAL))) {
+      // 如果该group没有权限，那么就回复一个error错误码的response
       sendResponseMaybeThrottle(request, requestThrottleMs =>
         new JoinGroupResponse(
           requestThrottleMs,
@@ -1272,23 +1280,27 @@ class KafkaApis(val requestChannel: RequestChannel,
           Collections.emptyMap())
       )
     } else {
+      // 只有在版本号大于4时，才会返回MEMBER_ID_REQUIRED的错误码
       // Only return MEMBER_ID_REQUIRED error if joinGroupRequest version is >= 4
       val requireKnownMemberId = joinGroupRequest.version >= 4
 
       // let the coordinator handle join-group
+      // 构建一个协议名和metadata的list
       val protocols = joinGroupRequest.groupProtocols().asScala.map(protocol =>
         (protocol.name, Utils.toArray(protocol.metadata))).toList
+
+      // 处理join group请求
       groupCoordinator.handleJoinGroup(
-        joinGroupRequest.groupId,
-        joinGroupRequest.memberId,
-        requireKnownMemberId,
-        request.header.clientId,
-        request.session.clientAddress.toString,
-        joinGroupRequest.rebalanceTimeout,
-        joinGroupRequest.sessionTimeout,
-        joinGroupRequest.protocolType,
-        protocols,
-        sendResponseCallback)
+        joinGroupRequest.groupId,// join groupId
+        joinGroupRequest.memberId, // 成员
+        requireKnownMemberId, // 未知memberId的处理
+        request.header.clientId, // 客户端进行配置的，如果没有配置，那么会在consumer-前缀后面加上一个递增的数字
+        request.session.clientAddress.toString,//客户端地址
+        joinGroupRequest.rebalanceTimeout,//rebalance超时时间,对应客户端配置是max.poll.interval.ms，默认值是5分钟，但如果是v0版本，那么这里的rebalance时间就是session timeout时间
+        joinGroupRequest.sessionTimeout,//session超时时间，客户端如果没有显示配置的话，默认值是10秒
+        joinGroupRequest.protocolType,//协议类型: 这里的协议类型是consumer
+        protocols,//协议元数据: 包括订阅的topic以及配置的分区分配策略
+        sendResponseCallback)//回复response的call back
     }
   }
 
