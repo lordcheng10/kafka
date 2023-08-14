@@ -138,24 +138,29 @@ class GroupCoordinator(val brokerId: Int,
             // 处理未知join
             doUnknownJoinGroup(group, requireKnownMemberId, clientId, clientHost, rebalanceTimeoutMs, sessionTimeoutMs, protocolType, protocols, responseCallback)
           } else {
+            // 回复error response
             responseCallback(joinError(memberId, Errors.UNKNOWN_MEMBER_ID))
           }
 
         case Some(group) =>
           group.inLock {
+            // 如果group存在，那么就看该group的成员数是否超过group的最大成员数限制，如果已经超过了单group的最大member数了，
+            // 那么就得看该group中是否存在该member，如果存在，并且该member还没处于等待join的状态，那么就将该member移除：规模过大的团队，需要裁减尚未加入的成员
             if ((groupIsOverCapacity(group)
                   && group.has(memberId) && !group.get(memberId).isAwaitingJoin) // oversized group, need to shed members that haven't joined yet
-                || (isUnknownMember && group.size >= groupConfig.groupMaxSize)) {
+              // 如果是未知的member，并且该group的成员数超过了最大限制，那么也要移除该memberId
+              || (isUnknownMember && group.size >= groupConfig.groupMaxSize)) {
               group.remove(memberId)
               responseCallback(joinError(JoinGroupRequest.UNKNOWN_MEMBER_ID, Errors.GROUP_MAX_SIZE_REACHED))
-            } else if (isUnknownMember) {
+            } else if (isUnknownMember) {//如果是未知的member,那么就调用doUnknownJoinGroup方法
               doUnknownJoinGroup(group, requireKnownMemberId, clientId, clientHost, rebalanceTimeoutMs, sessionTimeoutMs, protocolType, protocols, responseCallback)
             } else {
+              // 如果没有超过单group的member限制，那么就就处理group加入
               doJoinGroup(group, memberId, clientId, clientHost, rebalanceTimeoutMs, sessionTimeoutMs, protocolType, protocols, responseCallback)
             }
 
             // attempt to complete JoinGroup
-            if (group.is(PreparingRebalance)) {
+            if (group.is(PreparingRebalance)) {//如果该group当前处于prepare，就检查下该group是否完成了join阶段
               joinPurgatory.checkAndComplete(GroupKey(group.groupId))
             }
           }
@@ -204,18 +209,29 @@ class GroupCoordinator(val brokerId: Int,
           // If member id required, register the member in the pending member list
           // and send back a response to call for another join group request with allocated member id.
           group.addPendingMember(newMemberId)//都回复error response了，为啥要加入到pending member里? 加入到pendding里，是为了让检查过的逻辑不用再检查?
-          addPendingMemberExpiration(group, newMemberId, sessionTimeoutMs)//
-          //回复一个MEMBER_ID_REQUIRED异常的错误码
+          addPendingMemberExpiration(group, newMemberId, sessionTimeoutMs)// 如果超过sessionTimeoutMs，那么就会从pendding中移除该member
+          //回复一个MEMBER_ID_REQUIRED异常的错误码,客户端再收到该错误后，会用服务端传过来的memberId，然后重新发送join请求
           responseCallback(joinError(newMemberId, Errors.MEMBER_ID_REQUIRED))
         } else {
-          // 添加成员，并触发rebalance
+          // 如果是低版本，那么就直接添加成员，并触发rebalance
           addMemberAndRebalance(rebalanceTimeoutMs, sessionTimeoutMs, newMemberId, clientId, clientHost, protocolType,
             protocols, group, responseCallback)
         }
       }
     }
   }
-  
+
+  /**
+   * group: group的元数据信息
+   * memberId: 成员id
+   * clientId：客户端id
+   * clientHost:客户端ip
+   * rebalanceTimeoutMs: rebalance超时时间
+   * sessionTimeoutMs: 会话超时时间
+   * protocolType: 协议类型
+   * protocols: 该成员携带的协议，key是对应的分区分配策略名，value是对应的负责的分区
+   * responseCallback: 最后回复response的处理callback函数
+   * */
   private def doJoinGroup(group: GroupMetadata,
                           memberId: String,
                           clientId: String,
@@ -227,34 +243,44 @@ class GroupCoordinator(val brokerId: Int,
                           responseCallback: JoinCallback) {
     group.inLock {
       if (group.is(Dead)) {
+        //如果该组被标记为dead，则表示其他线程刚刚删除了该组
+        //从协调器元数据；这很可能是该组已迁移到其他组
+        //协调器OR组处于瞬态不稳定阶段。让成员重试
+        //在没有指定成员id的情况下加入。
         // if the group is marked as dead, it means some other thread has just removed the group
         // from the coordinator metadata; this is likely that the group has migrated to some other
         // coordinator OR the group is in a transient unstable phase. Let the member retry
         // joining without the specified member id.
         responseCallback(joinError(memberId, Errors.UNKNOWN_MEMBER_ID))
-      } else if (!group.supportsProtocols(protocolType, MemberMetadata.plainProtocolSet(protocols))) {
+      } else if (!group.supportsProtocols(protocolType, MemberMetadata.plainProtocolSet(protocols))) {// 如果协议不匹配，那么就返回不一致的group协议错误response
         responseCallback(joinError(memberId, Errors.INCONSISTENT_GROUP_PROTOCOL))
-      } else if (group.isPendingMember(memberId)) {
+      } else if (group.isPendingMember(memberId)) {// 如果是之前被挂起的member，说明是重新join，那么此时就加入就好了
         // A rejoining pending member will be accepted.
         addMemberAndRebalance(rebalanceTimeoutMs, sessionTimeoutMs, memberId, clientId, clientHost, protocolType,
           protocols, group, responseCallback)
-      } else if (!group.has(memberId)) {
+      } else if (!group.has(memberId)) {// 如果该group没有这个member，那么就回复未知response的错误码
         // if the member trying to register with a un-recognized id, send the response to let
         // it reset its member id and retry.
         responseCallback(joinError(memberId, Errors.UNKNOWN_MEMBER_ID))
       } else {
         group.currentState match {
-          case PreparingRebalance =>
-            val member = group.get(memberId)
+          case PreparingRebalance =>// 如果是准备rebalance阶段
+            val member = group.get(memberId)// 获取member
+            // 更新member并rebalance
             updateMemberAndRebalance(group, member, protocols, responseCallback)
 
           case CompletingRebalance =>
+            // 首先从group中获取该member
             val member = group.get(memberId)
+            // 检查该member请求过来的协议和group中存放的协议是否匹配
             if (member.matches(protocols)) {
+              // 成员使用相同的元数据加入（可能是因为它未能接收到初始JoinGroup响应），所以只返回当前生成的当前组信息。
+              // 这种情况就直接回复response就好了
               // member is joining with the same metadata (which could be because it failed to
               // receive the initial JoinGroup response), so just return current group information
               // for the current generation.
               responseCallback(JoinGroupResult(
+                // 如果是leader，那么会把当前的成员的信息以及每个成员订阅的topic和对应负责的分区回复给leader
                 members = if (group.isLeader(memberId)) {
                   group.currentMemberMetadata
                 } else {
@@ -263,21 +289,30 @@ class GroupCoordinator(val brokerId: Int,
                 memberId = memberId,
                 generationId = group.generationId,
                 subProtocol = group.protocolOrNull,
+                // 并且告诉他，你是leader
                 leaderId = group.leaderOrNull,
                 error = Errors.NONE))
             } else {
+              // 如果没有匹配上，那么就说明成员改变了metadata信息，这个时候，需要更新member的信息，然后rebalance
               // member has changed metadata, so force a rebalance
               updateMemberAndRebalance(group, member, protocols, responseCallback)
             }
 
           case Stable =>
+            // 从group中获取到该member
             val member = group.get(memberId)
+            // 如果此时是stable状态，并且该member是leader，或不匹配对应的协议
             if (group.isLeader(memberId) || !member.matches(protocols)) {
+              // 如果成员更改了元数据，或者领导者发送了JoinGroup，则强制重新平衡。
+              // 后者允许领导者为影响分配但不影响成员元数据的更改触发重新平衡（例如使用者的主题元数据更改）
               // force a rebalance if a member has changed metadata or if the leader sends JoinGroup.
               // The latter allows the leader to trigger rebalances for changes affecting assignment
               // which do not affect the member metadata (such as topic metadata changes for the consumer)
               updateMemberAndRebalance(group, member, protocols, responseCallback)
-            } else {
+            } else {//如果该join请求的member不是leader并且对应的元数据是匹配的，那么就直接回复response
+              // 对于元数据没有实际更改的关注者，只需返回当前代的组信息，即可发布SyncGroup
+              // 用于当前一代，这将允许他们发布SyncGroup
+              // 什么情况下，之前注册过的成员，元数据没变的情况，又会再发一次join请求呢？
               // for followers with no actual change to their metadata, just return group information
               // for the current generation which will allow them to issue SyncGroup
               responseCallback(JoinGroupResult(
@@ -290,6 +325,7 @@ class GroupCoordinator(val brokerId: Int,
             }
 
           case Empty | Dead =>
+            // 如果该group的状态是empty或dead,那么group此时的状态是不符合预期的，需要直接回复response
             // Group reaches unexpected state. Let the joining member reset their generation and rejoin.
             warn(s"Attempt to add rejoining member $memberId of group ${group.groupId} in " +
               s"unexpected group state ${group.currentState}")
@@ -723,9 +759,9 @@ class GroupCoordinator(val brokerId: Int,
   }
 
   private def resetAndPropagateAssignmentError(group: GroupMetadata, error: Errors) {
-    assert(group.is(CompletingRebalance))
-    group.allMemberMetadata.foreach(_.assignment = Array.empty[Byte])
-    propagateAssignment(group, error)
+    assert(group.is(CompletingRebalance))// 检查是否是出于正在完成rebalance阶段
+    group.allMemberMetadata.foreach(_.assignment = Array.empty[Byte])// 遍历所有member的分配，将分配方案赋值为空byte数组
+    propagateAssignment(group, error)//然后传播分配
   }
 
   private def propagateAssignment(group: GroupMetadata, error: Errors) {
@@ -761,15 +797,21 @@ class GroupCoordinator(val brokerId: Int,
   }
 
   private def completeAndScheduleNextExpiration(group: GroupMetadata, member: MemberMetadata, timeoutMs: Long): Unit = {
+    // 成员key
     val memberKey = MemberKey(member.groupId, member.memberId)
 
+    // 完成当前心跳预期
     // complete current heartbeat expectation
     member.heartbeatSatisfied = true
+    // 检查是否心跳完成，如果还有没完成的，会尝试完成
     heartbeatPurgatory.checkAndComplete(memberKey)
 
+    // 将心跳变量设置为false，标识继续等待下一次心跳完成
     // reschedule the next heartbeat expiration deadline
     member.heartbeatSatisfied = false
+    // 构建一个心跳delay task，放入heartbeatPurgatory中
     val delayedHeartbeat = new DelayedHeartbeat(this, group, member.memberId, isPending = false, timeoutMs)
+    // 放入心跳监视器中,heartbeatPurgatory背后的原理还是不太清楚
     heartbeatPurgatory.tryCompleteElseWatch(delayedHeartbeat, Seq(memberKey))
   }
 
@@ -788,6 +830,17 @@ class GroupCoordinator(val brokerId: Int,
     heartbeatPurgatory.checkAndComplete(memberKey)
   }
 
+  /**
+   * rebalanceTimeoutMs: 传入rebalance超时;
+   * sessionTimeoutMs: 传入sessionTimeoutMs;
+   * memberId: 成员id
+   * clientId: 客户端id
+   * clientHost: 客户端地址
+   * protocolType: 协议类型
+   * protocols: 客户端带过来的协议元数据： 包括订阅的topic以及配置的分区分配策略
+   * group: group metadata,记录了该group的groupId和group状态以及时间
+   * callback: join后的回调方法
+   * */
   private def addMemberAndRebalance(rebalanceTimeoutMs: Int,
                                     sessionTimeoutMs: Int,
                                     memberId: String,
@@ -797,26 +850,40 @@ class GroupCoordinator(val brokerId: Int,
                                     protocols: List[(String, Array[Byte])],
                                     group: GroupMetadata,
                                     callback: JoinCallback) {
+    // 首先构建member的元数据
     val member = new MemberMetadata(memberId, group.groupId, clientId, clientHost, rebalanceTimeoutMs,
       sessionTimeoutMs, protocolType, protocols)
 
+    // 该member是否是新加入的，这个拿来干嘛呀? 如果是新加入的member，那么就要检查心跳是否过期，当然只有等待加入的时候，
+    // 才可以忽略心跳,所谓等待加入，实际就是该join请求已经到服务端了，并且在处理了，此时即便检查到该member心跳过期，那也得让他加入；
     member.isNew = true
 
+    // 更新 newMemberAdded 标志以指示加入组可以进一步延迟
+    // PreparingRebalance: 开始等待join加入，rebalance阶段；
+    // generationId这个变量是干嘛的？ 每完成一个member的加入，该变量就会加1
     // update the newMemberAdded flag to indicate that the join group can be further delayed
     if (group.is(PreparingRebalance) && group.generationId == 0)
       group.newMemberAdded = true
 
+    // 将该member放入到该group中，同时记录上对应的callback，这个callback就是该member完成后回复response的
     group.add(member, callback)
 
+    // 会话超时不会影响新成员，因为他们没有memberId，也无法发送检测信号。
+    // 此外，我们无法检测到断开连接，因为当JoinGroup处于炼狱中时，套接字被静音。
+    // 如果客户端确实断开了连接（例如，由于长时间重新平衡期间的请求超时），他们可能会简单地重试，这将导致重新平衡中有许多不起作用的成员
+    // 为了防止这种情况无限期地发生，我们暂停JoinGroup对新成员的请求。如果新成员仍然存在，我们希望它重试。
     // The session timeout does not affect new members since they do not have their memberId and
     // cannot send heartbeats. Furthermore, we cannot detect disconnects because sockets are muted
     // while the JoinGroup is in purgatory. If the client does disconnect (e.g. because of a request
     // timeout during a long rebalance), they may simply retry which will lead to a lot of defunct
     // members in the rebalance. To prevent this going on indefinitely, we timeout JoinGroup requests
     // for new members. If the new member is still there, we expect it to retry.
-    completeAndScheduleNextExpiration(group, member, NewMemberJoinTimeoutMs)
+    // 完成并安排下一次到期
+    completeAndScheduleNextExpiration(group, member, NewMemberJoinTimeoutMs)// 新成员加入超时，写死的5min
 
+    // 从pending的member中移除该member
     group.removePendingMember(memberId)
+    // 也许准备重新平衡
     maybePrepareRebalance(group, s"Adding new member $memberId")
   }
 
@@ -824,23 +891,28 @@ class GroupCoordinator(val brokerId: Int,
                                        member: MemberMetadata,
                                        protocols: List[(String, Array[Byte])],
                                        callback: JoinCallback) {
+    // 更新该group的member
     group.updateMember(member, protocols, callback)
+    // 更新该group的状态
     maybePrepareRebalance(group, s"Updating metadata for member ${member.memberId}")
   }
 
+  // 尝试重新rebalance
   private def maybePrepareRebalance(group: GroupMetadata, reason: String) {
     group.inLock {
-      if (group.canRebalance)
+      if (group.canRebalance) {// 首先检查是否可以rebalance:就是检查当前状态的前一个状态是否合理
+        // 可以的话就准备rebalance
         prepareRebalance(group, reason)
+      }
     }
   }
 
   private def prepareRebalance(group: GroupMetadata, reason: String) {
     // if any members are awaiting sync, cancel their request and have them rejoin
-    if (group.is(CompletingRebalance))
-      resetAndPropagateAssignmentError(group, Errors.REBALANCE_IN_PROGRESS)
+    if (group.is(CompletingRebalance))// 如果是出于正在完成rebalance阶段，那么就取消该join请求，让其重新发送join
+      resetAndPropagateAssignmentError(group, Errors.REBALANCE_IN_PROGRESS)//给每一个member发送一个正在rebalance的错误码，让其重新发送join请求
 
-    val delayedRebalance = if (group.is(Empty))
+    val delayedRebalance = if (group.is(Empty))// 如果empty为空，那么就构建一个初始delayjoin请求，否则就构建一个delayjoin请求
       new InitialDelayedJoin(this,
         joinPurgatory,
         group,
@@ -850,12 +922,14 @@ class GroupCoordinator(val brokerId: Int,
     else
       new DelayedJoin(this, group, group.rebalanceTimeoutMs)
 
+    // 将该group的状态转成准备rebalance状态
     group.transitionTo(PreparingRebalance)
 
     info(s"Preparing to rebalance group ${group.groupId} in state ${group.currentState} with old generation " +
       s"${group.generationId} (${Topic.GROUP_METADATA_TOPIC_NAME}-${partitionFor(group.groupId)}) (reason: $reason)")
 
     val groupKey = GroupKey(group.groupId)
+    // 尝试完成该delay join请求，并会watch
     joinPurgatory.tryCompleteElseWatch(delayedRebalance, Seq(groupKey))
   }
 

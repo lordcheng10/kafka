@@ -69,6 +69,8 @@ private[group] class MemberMetadata(val memberId: String,
   var isLeaving: Boolean = false
   var isNew: Boolean = false
 
+  // 该变量用于通过延迟心跳炼狱来跟踪心跳完成情况。 当安排新的心跳过期时，我们将此值设置为“false”。
+  // 收到心跳（或指示客户端活动的任何其他事件）后，我们将其设置为“true”，以便可以完成延迟的心跳。
   // This variable is used to track heartbeat completion through the delayed
   // heartbeat purgatory. When scheduling a new heartbeat expiration, we set
   // this value to `false`. Upon receiving the heartbeat (or any other event
@@ -92,12 +94,15 @@ private[group] class MemberMetadata(val memberId: String,
 
   def hasSatisfiedHeartbeat: Boolean = {
     if (isNew) {
+      // 刚加入的member要检查心跳是否完成
       // New members can be expired while awaiting join, so we have to check this first
       heartbeatSatisfied
     } else if (isAwaitingJoin || isAwaitingSync) {
+      // 等待重新平衡的成员会自动满足预期的心跳
       // Members that are awaiting a rebalance automatically satisfy expected heartbeats
       true
     } else {
+      // 其他情况也要检查心跳
       // Otherwise we require the next heartbeat
       heartbeatSatisfied
     }

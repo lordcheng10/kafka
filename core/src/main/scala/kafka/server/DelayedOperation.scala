@@ -31,24 +31,32 @@ import scala.collection._
 import scala.collection.mutable.ListBuffer
 
 /**
+ * 一种操作，其处理最多需要延迟给定的延迟时间。例如，延迟的生产操作可能正在等待指定数量的ack；或者延迟的获取操作可能正在等待给定数量的字节累积。
  * An operation whose processing needs to be delayed for at most the given delayMs. For example
  * a delayed produce operation could be waiting for specified number of acks; or
  * a delayed fetch operation could be waiting for a given number of bytes to accumulate.
  *
+ *  完成延迟操作时的逻辑在onComplete（）中定义，并且将只调用一次。一旦操作完成，isCompleted（）将返回true。
+ *  onComplete可以由forceComplete触发，如果操作尚未完成，
+ *  它会在delayMs之后强制调用onComplete；或者tryComplete，它首先检查操作现在是否可以完成，如果是，则调用forceComple
  * The logic upon completing a delayed operation is defined in onComplete() and will be called exactly once.
  * Once an operation is completed, isCompleted() will return true. onComplete() can be triggered by either
  * forceComplete(), which forces calling onComplete() after delayMs if the operation is not yet completed,
  * or tryComplete(), which first checks if the operation can be completed or not now, and if yes calls
  * forceComplete().
  *
+ * DelayedOperation的子类需要同时提供onComplete和tryComplete的实现
  * A subclass of DelayedOperation needs to provide an implementation of both onComplete() and tryComplete().
  */
 abstract class DelayedOperation(override val delayMs: Long,
     lockOpt: Option[Lock] = None) extends TimerTask with Logging {
 
+  // 标记是否完成
   private val completed = new AtomicBoolean(false)
+  // 是否要尝试完成pending的任务
   private val tryCompletePending = new AtomicBoolean(false)
   // Visible for testing
+  // 可重入锁
   private[server] val lock: Lock = lockOpt.getOrElse(new ReentrantLock)
 
   /*
@@ -63,7 +71,7 @@ abstract class DelayedOperation(override val delayMs: Long,
    * the first thread will succeed in completing the operation and return
    * true, others will still return false
    */
-  def forceComplete(): Boolean = {
+  def forceComplete(): Boolean = {// 如果当前任务还没完成，那么就比较完成，然后取消定时任务后，再回调完成方法
     if (completed.compareAndSet(false, true)) {
       // cancel the timeout timer
       cancel()
@@ -75,22 +83,30 @@ abstract class DelayedOperation(override val delayMs: Long,
   }
 
   /**
+   * 检查当前任务是否已经完成
    * Check if the delayed operation is already completed
    */
   def isCompleted: Boolean = completed.get()
 
   /**
+   * 当延迟的操作过期并因此被迫完成时，回调以执行。
    * Call-back to execute when a delayed operation gets expired and hence forced to complete.
    */
   def onExpiration(): Unit
 
   /**
+   * 完成操作的过程；此函数需要在子类中定义，并且将在forceComplete（）中只调用一次
    * Process for completing an operation; This function needs to be defined
    * in subclasses and will be called exactly once in forceComplete()
    */
   def onComplete(): Unit
 
   /**
+   * 尝试首先检查操作是否
+   * 现在可以完成。如果是，则通过调用执行完成逻辑
+   * forceComplete（）并返回true，如果forceComplete返回true；否则返回false
+   * 此函数需要在子类中定义
+   *
    * Try to complete the delayed operation by first checking if the operation
    * can be completed by now. If yes execute the completion logic by calling
    * forceComplete() and return true iff forceComplete returns true; otherwise return false
@@ -100,6 +116,11 @@ abstract class DelayedOperation(override val delayMs: Long,
   def tryComplete(): Boolean
 
   /**
+   * tryComplete（）的线程安全变体，仅当可以在没有阻塞的情况下获取锁时才尝试完成。
+   * 如果线程A在满足完成标准之前获取锁并执行完成检查，而线程B满足完成标准，但由于线程A尚未释放锁而未能获取锁，则我们需要确保在不阻塞线程A的情况下再次尝试完成
+   * 或螺纹B`tryCompletePending`由threadB在获取锁失败时设置，并且如果设置了此标志，threadA或threadB中的至少一个将尝试完成操作。
+   * 这样可以确保每次调用“maybeTryComplete”之后至少调用一次“tryComplete”，直到操作实际完成。
+   *
    * Thread-safe variant of tryComplete() that attempts completion only if the lock can be acquired
    * without blocking.
    *

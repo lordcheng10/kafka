@@ -27,7 +27,9 @@ import scala.math._
 @threadsafe
 private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
 
+  // TimerTaskList使用伪根条目形成双链接循环列表
   // TimerTaskList forms a doubly linked cyclic list using a dummy root entry
+  // root的next指针指向head，prev指针指向tail
   // root.next points to the head
   // root.prev points to the tail
   private[this] val root = new TimerTaskEntry(null, -1)
@@ -105,7 +107,7 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
   }
 
   // Remove all task entries and apply the supplied function to each of them
-  def flush(f: (TimerTaskEntry)=>Unit): Unit = {
+  def flush(f: TimerTaskEntry =>Unit): Unit = {
     synchronized {
       var head = root.next
       while (head ne root) {
@@ -132,13 +134,18 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
 
 }
 
+// timerTask: 定时任务; expirationMs：过期时间
 private[timer] class TimerTaskEntry(val timerTask: TimerTask, val expirationMs: Long) extends Ordered[TimerTaskEntry] {
 
+  // 定时任务列表
   @volatile
   var list: TimerTaskList = null
+  // 定时任务entry向下指针
   var next: TimerTaskEntry = null
+  // 定时任务entry向上指针
   var prev: TimerTaskEntry = null
 
+  // 如果此timerTask已被现有的计时器任务条目占用，则setTimerTaskEntry将删除之前的，然后再赋值
   // if this timerTask is already held by an existing timer task entry,
   // setTimerTaskEntry will remove it.
   if (timerTask != null) timerTask.setTimerTaskEntry(this)

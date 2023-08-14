@@ -18,8 +18,10 @@ package kafka.utils.timer
 
 trait TimerTask extends Runnable {
 
+  // 要delay的时间
   val delayMs: Long // timestamp in millisecond
 
+  // 定时task entry
   private[this] var timerTaskEntry: TimerTaskEntry = null
 
   def cancel(): Unit = {

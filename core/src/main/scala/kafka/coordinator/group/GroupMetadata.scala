@@ -209,20 +209,36 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   def currentStateTimestampOrDefault: Long = currentStateTimestamp.getOrElse(-1)
 
   def add(member: MemberMetadata, callback: JoinCallback = null) {
+    // 如果没有成员，那么将该成员的协议类型赋值给group的协议变量，这里的协议类型有很多吗
     if (members.isEmpty)
       this.protocolType = Some(member.protocolType)
 
+    // 首先检查groupId是否等于当前member的groupId
     assert(groupId == member.groupId)
+    // 检查protocolType为否等于member的type
     assert(this.protocolType.orNull == member.protocolType)
+    //检查支持的协议，这里检查的目的是啥？协议类型的作用是啥？检查服务端记录的协议和member数是否一致
+    // 这里是为了检查，该member携带的分区策略中，是否有一个是所有member都有的，必须要保证至少有一个分区策略是所有member都有的，然后在投票选择
     assert(supportsProtocols(member.protocolType, MemberMetadata.plainProtocolSet(member.supportedProtocols)))
 
+    // leaderId是否为空，如果为空，那么就说明当前加入的这个member是第一个，那么就选它做leader
     if (leaderId.isEmpty)
       leaderId = Some(member.memberId)
+    // 记录memberId和对应的member，将该成员加入到members集合列表中
     members.put(member.memberId, member)
+    // 将该成员增加的协议对应内存中维护的，全部加1，内存中记录每个协议有多少个成员的作用是啥
+    // supportedProtocols的key是使用的分区策略名，value是该策略对应的member数，回复response的时候会回一个分区策略，
+    // 服务端在选择使用哪个分区策略的时候，会首先过滤到不是所有member都支持的分区策略，然后再投票，选出一个分区策略给客户端
+    // 投票的规则就是按照supportedProtocols中的顺序来，如果第3个策略，所有member都满足，那么所有的member都会投它一票，从而就都会选它作为分区策略
+    // 客户端在配置分区策略时，可以填多个分区策略
     member.supportedProtocols.foreach{ case (protocol, _) => supportedProtocols(protocol) += 1 }
+    // 当join操作完成后(不管是正常还是异常完成，或中途被移除)，那么就会调用该callback
     member.awaitingJoinCallback = callback
-    if (member.isAwaitingJoin)
+    if (member.isAwaitingJoin) {
+    //如果该member处于awaiting join状态，那么就累计加1,只要awaitingJoinCallback不为null，那么就是处于等待join状态
+      // 从将该member加入内存开始，到该memberjoin完成后，调回调方法，都是awaitingJoin状态
       numMembersAwaitingJoin += 1
+    }
   }
 
   def remove(memberId: String) {
@@ -300,7 +316,8 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
     if (is(Empty))// 如果当前group的状态是empty，那么就检查协议类型和协议是否都不为空，有一个为空，那么就返回false
       !memberProtocolType.isEmpty && memberProtocols.nonEmpty
     else {
-      // 如果协议类型相同，并且这个协议支持的成员数和实际成员相等，那么就返回true
+      // 看看是不是所有的member都使用了同一种分区策略：比如都使用轮训 或stik 分区策略，如果不同的member使用了不同的策略，那么就报错
+      // 只要有一个协议是所有成员都有的就行
       protocolType.contains(memberProtocolType) && memberProtocols.exists(supportedProtocols(_) == members.size)
     }
   }
@@ -308,15 +325,20 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   def updateMember(member: MemberMetadata,
                    protocols: List[(String, Array[Byte])],
                    callback: JoinCallback) = {
+    // 首先每个member对应协议里的成员计数减1
     member.supportedProtocols.foreach{ case (protocol, _) => supportedProtocols(protocol) -= 1 }
+    // 为啥上面减了，这里又要加呢
     protocols.foreach{ case (protocol, _) => supportedProtocols(protocol) += 1 }
+    // 更新该member支持的协议
     member.supportedProtocols = protocols
 
+    // 如果该member的callback回调不为null，那么等待join计数加1，否则减1
     if (callback != null && !member.isAwaitingJoin) {
       numMembersAwaitingJoin += 1
     } else if (callback == null && member.isAwaitingJoin) {
       numMembersAwaitingJoin -= 1
     }
+    // 将callback赋值给awaitingJoinCallback
     member.awaitingJoinCallback = callback
   }
 

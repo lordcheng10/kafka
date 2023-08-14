@@ -70,8 +70,14 @@ private[group] class InitialDelayedJoin(coordinator: GroupCoordinator,
           delay,
           remaining
         ), Seq(GroupKey(group.groupId)))
-      } else
+      } else {
+        // 到期了或在一定时间内，没有新的member加入，那么就标记该group完成
+        // 默认是3秒，也就是说，如果三秒没有新的member加入的话，那么就将该group标记完成
+        // 即便有新member加入，一旦到达5分钟(对应的是rebalanceTimeout，默认是5分钟)，那么也会强制将该group标记完成(老版本默认是用的sessionTimeOut ,10秒)
+        // 通常来说，5分钟内是肯定能加入的，除非consumer特别多，那么这个时候，需要调大rebalanceTimeOut，
+        // 但大部分情况是consumer启动之间有间隔，所以通常当第一次触发rebalance失败后，如果客户端重试的话，在第二次rebalance时，是能成功的
         super.onComplete()
+      }
     }
   }
 
