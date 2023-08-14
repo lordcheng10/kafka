@@ -290,12 +290,15 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   }
 
   def selectProtocol: String = {
+    // 如果成员没有，那么就直接返回错误
     if (members.isEmpty)
       throw new IllegalStateException("Cannot select protocol for empty group")
 
+    // 找出所有成员都支持的协议名：起始就是consumer的分区策略
     // select the protocol for this group which is supported by all members
     val candidates = candidateProtocols
 
+    // 从都支持的分区策略中选出一个策略，作为该group使用的分区策略
     // let each member vote for one of the protocols and choose the one with the most votes
     val votes: List[(String, Int)] = allMemberMetadata
       .map(_.vote(candidates))
@@ -352,13 +355,20 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   }
 
   def initNextGeneration() = {
+    // 要从join group完成后，进入到下一阶段，必须保证未加入的member集合为空
     assert(notYetRejoinedMembers == List.empty[MemberMetadata])
+
     if (members.nonEmpty) {
+      // 如果成员集合不为空，那么迭代加1
       generationId += 1
+      // 选出一个策略,作为该group的分区策略
       protocol = Some(selectProtocol)
+      // 将该group的状态切换到CompletingRebalance
       transitionTo(CompletingRebalance)
     } else {
+      // 如果成员集合为空，迭代也加1
       generationId += 1
+      // 但协议填None，并且状态也要切换到Empty,说明这个时候，该gorup的成员全部被清空了
       protocol = None
       transitionTo(Empty)
     }

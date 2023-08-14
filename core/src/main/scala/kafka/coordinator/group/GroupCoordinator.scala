@@ -263,6 +263,7 @@ class GroupCoordinator(val brokerId: Int,
         // it reset its member id and retry.
         responseCallback(joinError(memberId, Errors.UNKNOWN_MEMBER_ID))
       } else {
+        // 如果该member之前已经join过(因为group里面有改member)
         group.currentState match {
           case PreparingRebalance =>// 如果是准备rebalance阶段
             val member = group.get(memberId)// 获取member
@@ -860,7 +861,7 @@ class GroupCoordinator(val brokerId: Int,
 
     // 更新 newMemberAdded 标志以指示加入组可以进一步延迟
     // PreparingRebalance: 开始等待join加入，rebalance阶段；
-    // generationId这个变量是干嘛的？ 每完成一个member的加入，该变量就会加1
+    // generationId这个变量是干嘛的？ 每完成一轮group的join，该变量就会加1
     // update the newMemberAdded flag to indicate that the join group can be further delayed
     if (group.is(PreparingRebalance) && group.generationId == 0)
       group.newMemberAdded = true
@@ -912,15 +913,21 @@ class GroupCoordinator(val brokerId: Int,
     if (group.is(CompletingRebalance))// 如果是出于正在完成rebalance阶段，那么就取消该join请求，让其重新发送join
       resetAndPropagateAssignmentError(group, Errors.REBALANCE_IN_PROGRESS)//给每一个member发送一个正在rebalance的错误码，让其重新发送join请求
 
-    val delayedRebalance = if (group.is(Empty))// 如果empty为空，那么就构建一个初始delayjoin请求，否则就构建一个delayjoin请求
+    // 当group状态为empty的时候，只能通过一段时间内，有没有member加入来判断是否完成一轮join阶段；
+    // 如果group状态不是empty，那么就知道该group有哪些member，那么在每次加入member的时候，都可以尝试tryComplete，在该方法中会去判断是否所有member都加入进来了，如果都加入了，那么就会complete；
+    // 为啥group 为empty时，不能用DelayedJoin，因为如果用DelayedJoin的话，每次tryComplete都会返回true，这样如果加入十个consumer成员，就会触发十次rebalance
+    val delayedRebalance = if (group.is(Empty)) {// 如果empty为空，那么就构建一个初始delayjoin请求，否则就构建一个delayjoin请求
+      // 只有第一次join的时候，每次delay唤醒时间是groupInitialRebalanceDelayMs,每隔groupInitialRebalanceDelayMs都会检查一下是否完成
       new InitialDelayedJoin(this,
         joinPurgatory,
         group,
         groupConfig.groupInitialRebalanceDelayMs,
         groupConfig.groupInitialRebalanceDelayMs,
         max(group.rebalanceTimeoutMs - groupConfig.groupInitialRebalanceDelayMs, 0))
-    else
+    } else {
+      // 后面再join的话，都会等rebalanceTimeoutMs才会检查一次，只检查一次
       new DelayedJoin(this, group, group.rebalanceTimeoutMs)
+    }
 
     // 将该group的状态转成准备rebalance状态
     group.transitionTo(PreparingRebalance)
@@ -958,28 +965,33 @@ class GroupCoordinator(val brokerId: Int,
 
   def tryCompleteJoin(group: GroupMetadata, forceComplete: () => Boolean) = {
     group.inLock {
+      // 如果所有member都加入了,并且没有挂起的member，那么就强制complete完成
       if (group.hasAllMembersJoined)
         forceComplete()
       else false
     }
   }
 
+  // 过期不会做什么
   def onExpireJoin() {
     // TODO: add metrics for restabilize timeouts
   }
 
   def onCompleteJoin(group: GroupMetadata) {
     group.inLock {
+      // 删除所有尚未加入group的member(正在等待加入的member)
       // remove any members who haven't joined the group yet
       group.notYetRejoinedMembers.foreach { failedMember =>
+        // 首先将这些要移除的member，从心跳中移除
         removeHeartbeatForLeavingMember(group, failedMember)
         group.remove(failedMember.memberId)
         // TODO: cut the socket connection to the client
       }
 
-      if (!group.is(Dead)) {
+      if (!group.is(Dead)) {// 如果group不是dead状态
+        // 选出该group使用的分区策略，并且将该group的状态切换到CompletingRebalance
         group.initNextGeneration()
-        if (group.is(Empty)) {
+        if (group.is(Empty)) {// 如果此时group的状态切换到了empty，那么将该group的GroupMetadata信息持久化
           info(s"Group ${group.groupId} with generation ${group.generationId} is now empty " +
             s"(${Topic.GROUP_METADATA_TOPIC_NAME}-${partitionFor(group.groupId)})")
 
@@ -994,11 +1006,12 @@ class GroupCoordinator(val brokerId: Int,
         } else {
           info(s"Stabilized group ${group.groupId} generation ${group.generationId} " +
             s"(${Topic.GROUP_METADATA_TOPIC_NAME}-${partitionFor(group.groupId)})")
-
+          // 遍历每个member,将每个member的call back函数进行回调
           // trigger the awaiting join group response callback for all the members after rebalancing
           for (member <- group.allMemberMetadata) {
             assert(member.awaitingJoinCallback != null)
             val joinResult = JoinGroupResult(
+              // 如果是leader的话，要把所有成员信息以及成员的分配信息返回
               members = if (group.isLeader(member.memberId)) {
                 group.currentMemberMetadata
               } else {

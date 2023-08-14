@@ -34,9 +34,11 @@ import scala.math.{max, min}
 private[group] class DelayedJoin(coordinator: GroupCoordinator,
                                  group: GroupMetadata,
                                  rebalanceTimeout: Long) extends DelayedOperation(rebalanceTimeout, Some(group.lock)) {
-
+  // 到时间后，会调用forceComplete方法，该方法会调用onComplete，如果forceComplete返回false，那么才会调用onExpiration
   override def tryComplete(): Boolean = coordinator.tryCompleteJoin(group, forceComplete _)
   override def onExpiration() = coordinator.onExpireJoin()
+
+  // 到时间后，会调用forceComplete，forceComplete返回false才会调用onExpiration，而在forceComplete中，会调用onComplete
   override def onComplete() = coordinator.onCompleteJoin(group)
 }
 
@@ -59,6 +61,13 @@ private[group] class InitialDelayedJoin(coordinator: GroupCoordinator,
 
   override def onComplete(): Unit = {
     group.inLock {
+      // 这里最终要做的效果是，当达到rebalancetimeout后，会触发完成join；或者在一轮configuredRebalanceDelay中，没有任何新memebr加入，那么也会完成；
+      // 也就是第一轮join耗时可能会比rebalance timeout短，后面几轮就必须等rebalance timeout到达才行，为啥呢?
+
+      // newMemberAdded为true的话，代表是该group的第一轮加入，如果是第一轮，并且remainingMs不为0
+      // 其中remainingMs初始值是rebalance timeout减去一次delay间隔时间
+      // 也就是只有第一轮加入的时候，才会一直等rebalance timeout结束后，才会正在完成join
+      // 如果是InitialDelayedJoin，那么是不是就是第一轮join，也就是说只要是InitialDelayedJoin，那么必然满足group.newMemberAdded && remainingMs != 0
       if (group.newMemberAdded && remainingMs != 0) {
         group.newMemberAdded = false
         val delay = min(configuredRebalanceDelay, remainingMs)
