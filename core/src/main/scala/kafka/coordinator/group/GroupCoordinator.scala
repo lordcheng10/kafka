@@ -789,7 +789,8 @@ class GroupCoordinator(val brokerId: Int,
       if (member.awaitingSyncCallback != null) {
         member.awaitingSyncCallback(member.assignment, error)
         member.awaitingSyncCallback = null
-
+        // 在传播成员的分配后重置成员的会话超时。这是因为，
+        // 如果任何成员的会话在我们仍在等待领导同步组或存储回调时过期，则其过期将被忽略，并且不会安排未来的检测信号预期。
         // reset the session timeout for members after propagating the member's assignment.
         // This is because if any member's session expired while we were still awaiting either
         // the leader sync group or the storage callback, its expiration will be ignored and no

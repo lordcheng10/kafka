@@ -1304,6 +1304,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
+  // ①将leader传过来的方案持久化并下发给其他成员；②完成一次心跳的交替；③如果持久化出错，那么会触发一次rebalance;
   def handleSyncGroupRequest(request: RequestChannel.Request) {
     // 获取syncGroupRequest对象
     val syncGroupRequest = request.body[SyncGroupRequest]
