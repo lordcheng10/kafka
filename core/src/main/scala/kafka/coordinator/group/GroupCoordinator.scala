@@ -341,7 +341,7 @@ class GroupCoordinator(val brokerId: Int,
                       memberId: String,
                       groupAssignment: Map[String, Array[Byte]],
                       responseCallback: SyncCallback): Unit = {
-    validateGroupStatus(groupId, ApiKeys.SYNC_GROUP) match {
+    validateGroupStatus(groupId, ApiKeys.SYNC_GROUP) match {// 检查group状态,如果有错误就回复error response
       case Some(error) if error == Errors.COORDINATOR_LOAD_IN_PROGRESS =>
         // The coordinator is loading, which means we've lost the state of the active rebalance and the
         // group will need to start over at JoinGroup. By returning rebalance in progress, the consumer
@@ -352,8 +352,11 @@ class GroupCoordinator(val brokerId: Int,
       case Some(error) => responseCallback(Array.empty, error)
 
       case None =>
+        // 如果没有错误,就获取对应group
         groupManager.getGroup(groupId) match {
+          // 如果group不存在，就回复error respnose
           case None => responseCallback(Array.empty, Errors.UNKNOWN_MEMBER_ID)
+          // 否则再进行实际处理
           case Some(group) => doSyncGroup(group, generation, memberId, groupAssignment, responseCallback)
         }
     }
@@ -365,40 +368,49 @@ class GroupCoordinator(val brokerId: Int,
                           groupAssignment: Map[String, Array[Byte]],
                           responseCallback: SyncCallback) {
     group.inLock {
+      // 首先检查该group是否有这个成员，如果没有，那么回复UNKNOWN_MEMBER_ID，客户端会重新join
       if (!group.has(memberId)) {
         responseCallback(Array.empty, Errors.UNKNOWN_MEMBER_ID)
-      } else if (generationId != group.generationId) {
+      } else if (generationId != group.generationId) {// 然后检查generationId
         responseCallback(Array.empty, Errors.ILLEGAL_GENERATION)
       } else {
+        // 然后检查group状态
         group.currentState match {
-          case Empty | Dead =>
+          case Empty | Dead =>// 如果该group处于Dead或empty状态，那么回复error response，有个问题：处于Empty或Dead状态，group里还可能存放memberId?
             responseCallback(Array.empty, Errors.UNKNOWN_MEMBER_ID)
 
-          case PreparingRebalance =>
+          case PreparingRebalance =>//回复error response
             responseCallback(Array.empty, Errors.REBALANCE_IN_PROGRESS)
 
-          case CompletingRebalance =>
+          case CompletingRebalance =>// 当join完成后，就会处于CompletingRebalance这个状态
+            // 赋值sync回调方法
             group.get(memberId).awaitingSyncCallback = responseCallback
 
             // if this is the leader, then we can attempt to persist state and transition to stable
-            if (group.isLeader(memberId)) {
+            if (group.isLeader(memberId)) {// 如果是leader，才会处理,其他member，只会记录号他们的回调方法，当拿到方案后，再调用回调，将response发出去
               info(s"Assignment received from leader for group ${group.groupId} for generation ${group.generationId}")
 
+              // 将没有分配的member找出来
               // fill any missing members with an empty assignment
               val missing = group.allMembers -- groupAssignment.keySet
+              // 给这些没有分配的member，分配空的任务，这种情况是有的，比如topic分区大于consumer数
               val assignment = groupAssignment ++ missing.map(_ -> Array.empty[Byte]).toMap
 
+              // 将分配方案进行持久化
               groupManager.storeGroup(group, assignment, (error: Errors) => {
                 group.inLock {
                   // another member may have joined the group while we were awaiting this callback,
                   // so we must ensure we are still in the CompletingRebalance state and the same generation
                   // when it gets invoked. if we have transitioned to another state, then do nothing
                   if (group.is(CompletingRebalance) && generationId == group.generationId) {
-                    if (error != Errors.NONE) {
+                    if (error != Errors.NONE) {//如果有报错,那么给每个member会发送一个空分配且包含错误码的response
                       resetAndPropagateAssignmentError(group, error)
+                      // 然后再触发rebalance
                       maybePrepareRebalance(group, s"error when storing group assignment during SyncGroup (member: $memberId)")
                     } else {
+                      // 如果没有错误，这里会将分配计划全部传递给其他member，不用等所有的成员发送sync group请求，就可以切换到stable状态了
                       setAndPropagateAssignment(group, assignment)
+                      // 然后将状态切到stable状态
                       group.transitionTo(Stable)
                     }
                   }
@@ -407,9 +419,11 @@ class GroupCoordinator(val brokerId: Int,
             }
 
           case Stable =>
+            // 如果处于stable状态，说明是在leader的sync之后的其他成员，此时直接把分配方案给他们就好了
             // if the group is stable, we just return the current assignment
             val memberMetadata = group.get(memberId)
             responseCallback(memberMetadata.assignment, Errors.NONE)
+            // 并且开启下一轮的心跳
             completeAndScheduleNextHeartbeatExpiration(group, group.get(memberId))
         }
       }

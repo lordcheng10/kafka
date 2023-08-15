@@ -1305,21 +1305,24 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleSyncGroupRequest(request: RequestChannel.Request) {
+    // 获取syncGroupRequest对象
     val syncGroupRequest = request.body[SyncGroupRequest]
 
+    // 回复response
     def sendResponseCallback(memberState: Array[Byte], error: Errors) {
       sendResponseMaybeThrottle(request, requestThrottleMs =>
         new SyncGroupResponse(requestThrottleMs, error, ByteBuffer.wrap(memberState)))
     }
 
+    //鉴权
     if (!authorize(request.session, Read, Resource(Group, syncGroupRequest.groupId(), LITERAL))) {
       sendResponseCallback(Array[Byte](), Errors.GROUP_AUTHORIZATION_FAILED)
     } else {
       groupCoordinator.handleSyncGroup(
-        syncGroupRequest.groupId,
-        syncGroupRequest.generationId,
-        syncGroupRequest.memberId,
-        syncGroupRequest.groupAssignment().asScala.mapValues(Utils.toArray),
+        syncGroupRequest.groupId,// groupId
+        syncGroupRequest.generationId,// 类似版本号，表示第几轮rebalance
+        syncGroupRequest.memberId,// 成员id
+        syncGroupRequest.groupAssignment().asScala.mapValues(Utils.toArray),//客户端分配方案
         sendResponseCallback
       )
     }
