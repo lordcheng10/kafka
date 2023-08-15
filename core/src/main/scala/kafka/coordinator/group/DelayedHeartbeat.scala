@@ -29,8 +29,14 @@ private[group] class DelayedHeartbeat(coordinator: GroupCoordinator,
                                       isPending: Boolean,
                                       timeoutMs: Long)
   extends DelayedOperation(timeoutMs, Some(group.lock)) {
-
+  // 这里的forceComplete只是取消定时任务，onComplete中没有逻辑，如果取消成功，那么会调用onExpiration，进行过期处理，如果没取消成功，那么下一次还会执行到
+  // 这里的tryComplete只会在tryCompleteElseWatch中调用,每次watch前，都会先尝试完成
+  // 我们可以通过调用checkAndComplete来检查是否可以在到期前完成
   override def tryComplete(): Boolean = coordinator.tryCompleteHeartbeat(group, memberId, isPending, forceComplete _)
+  // 到期后，才会调用
   override def onExpiration() = coordinator.onExpireHeartbeat(group, memberId, isPending)
+
+  // 到时间后，会调用forceComplete，在forceComplete中会调用onComplete
+  // 或者在调用checkAndComplete来手动尝试完成时，会调用forceComplete，从而调用onComplete
   override def onComplete() = coordinator.onCompleteHeartbeat()
 }

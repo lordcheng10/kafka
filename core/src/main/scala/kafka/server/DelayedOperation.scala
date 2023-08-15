@@ -161,7 +161,7 @@ abstract class DelayedOperation(override val delayMs: Long,
    * run() method defines a task that is executed on timeout
    */
   override def run(): Unit = {
-    if (forceComplete())// 先调用forceComplete方法，如果返回false，那么才会调用onExpiration
+    if (forceComplete())// 先调用forceComplete方法，如果返回true，那么才会调用onExpiration
       onExpiration()
   }
 }
