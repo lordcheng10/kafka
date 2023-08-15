@@ -1340,29 +1340,36 @@ class KafkaApis(val requestChannel: RequestChannel,
       new DeleteGroupsResponse(requestThrottleMs, groupDeletionResult.asJava))
   }
 
+  // 心跳处理有两个作用：①心跳超时后触发rebalance；②完成join请求处理阶段的一些回调；
   def handleHeartbeatRequest(request: RequestChannel.Request) {
+    // 提取HeartbeatRequest对象
     val heartbeatRequest = request.body[HeartbeatRequest]
 
+    // 发送心跳的response
     // the callback for sending a heartbeat response
     def sendResponseCallback(error: Errors) {
       def createResponse(requestThrottleMs: Int): AbstractResponse = {
+        // 心跳限速
         val response = new HeartbeatResponse(requestThrottleMs, error)
         trace("Sending heartbeat response %s for correlation id %d to client %s."
           .format(response, request.header.correlationId, request.header.clientId))
         response
       }
+      // 发送response，需要进行限速判断
       sendResponseMaybeThrottle(request, createResponse)
     }
 
+    // 权限校验
     if (!authorize(request.session, Read, Resource(Group, heartbeatRequest.groupId, LITERAL))) {
       sendResponseMaybeThrottle(request, requestThrottleMs =>
         new HeartbeatResponse(requestThrottleMs, Errors.GROUP_AUTHORIZATION_FAILED))
     } else {
+      // 处理心跳请求
       // let the coordinator to handle heartbeat
       groupCoordinator.handleHeartbeat(
-        heartbeatRequest.groupId,
-        heartbeatRequest.memberId,
-        heartbeatRequest.groupGenerationId,
+        heartbeatRequest.groupId,// groupId
+        heartbeatRequest.memberId, // memberId
+        heartbeatRequest.groupGenerationId, // group轮次号
         sendResponseCallback)
     }
   }

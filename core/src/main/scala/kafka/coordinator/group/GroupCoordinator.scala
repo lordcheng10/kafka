@@ -527,17 +527,21 @@ class GroupCoordinator(val brokerId: Int,
           case CompletingRebalance =>
             if (!group.has(memberId))
               responseCallback(Errors.UNKNOWN_MEMBER_ID)
-            else
+            else {
               responseCallback(Errors.REBALANCE_IN_PROGRESS)
+            }
 
           case PreparingRebalance =>
-            if (!group.has(memberId)) {
+            if (!group.has(memberId)) {//如果该group没有该member，那么就回复error response
               responseCallback(Errors.UNKNOWN_MEMBER_ID)
-            } else if (generationId != group.generationId) {
+            } else if (generationId != group.generationId) {//如果生成的id不相等，那么就回复ILLEGAL_GENERATION
               responseCallback(Errors.ILLEGAL_GENERATION)
             } else {
+              // 从group中获取对应的member
               val member = group.get(memberId)
+              // 完成一次心跳，并触发对应回调,并注册下一次心跳,为啥PreparingRebalance状态要完成心跳
               completeAndScheduleNextHeartbeatExpiration(group, member)
+              // 回复REBALANCE_IN_PROGRESS
               responseCallback(Errors.REBALANCE_IN_PROGRESS)
             }
 
@@ -547,6 +551,7 @@ class GroupCoordinator(val brokerId: Int,
             } else if (generationId != group.generationId) {
               responseCallback(Errors.ILLEGAL_GENERATION)
             } else {
+              // 这个是正常的处理
               val member = group.get(memberId)
               completeAndScheduleNextHeartbeatExpiration(group, member)
               responseCallback(Errors.NONE)
@@ -1039,8 +1044,10 @@ class GroupCoordinator(val brokerId: Int,
     group.inLock {
       // The group has been unloaded and invalid, we should complete the heartbeat.
       if (group.is(Dead)) {
+        // 如果该group是dead状态，那么会调用forceComplete进行强制完成
         forceComplete()
       } else if (isPending) {
+        // 如果成员已加入组，则完成检测信号,否则的话，member都没加入，那么不能完成心跳
         // complete the heartbeat if the member has joined the group
         if (group.has(memberId)) {
           forceComplete()
@@ -1053,6 +1060,7 @@ class GroupCoordinator(val brokerId: Int,
 
   def shouldCompleteNonPendingHeartbeat(group: GroupMetadata, memberId: String): Boolean = {
     if (group.has(memberId)) {
+      // 如果有该member了，那么看是否是完美心跳
       val member = group.get(memberId)
       member.hasSatisfiedHeartbeat || member.isLeaving
     } else {
@@ -1063,9 +1071,9 @@ class GroupCoordinator(val brokerId: Int,
 
   def onExpireHeartbeat(group: GroupMetadata, memberId: String, isPending: Boolean): Unit = {
     group.inLock {
-      if (group.is(Dead)) {
+      if (group.is(Dead)) {//如果该group已经Dead了，那么就只是打印一个日志
         info(s"Received notification of heartbeat expiration for member $memberId after group ${group.groupId} had already been unloaded or deleted.")
-      } else if (isPending) {
+      } else if (isPending) {//如果是挂起，那么从该group中移除该member
         info(s"Pending member $memberId in group ${group.groupId} has been removed after session timeout expiration.")
         removePendingMemberAndUpdateGroup(group, memberId)
       } else if (!group.has(memberId)) {
