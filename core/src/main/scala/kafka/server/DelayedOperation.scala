@@ -193,6 +193,8 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
         extends Logging with KafkaMetricsGroup {
   /* a list of operation watching keys */
   private class WatcherList {
+    // Pool就相当于一个并发map,key是对应watch的关键字，value是watchers对象
+    // WatcherList底层实际是一个map，这里叫list是因为Watchers底层是一个链表
     val watchersByKey = new Pool[Any, Watchers](Some((key: Any) => new Watchers(key)))
 
     val watchersLock = new ReentrantLock()
@@ -266,15 +268,18 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
 
     // At this point the only thread that can attempt this operation is this current thread
     // Hence it is safe to tryComplete() without a lock
+    // 先尝试自己完成该任务
     var isCompletedByMe = operation.tryComplete()
-    if (isCompletedByMe)
+    if (isCompletedByMe)// 如果完成了就返回true
       return true
 
     var watchCreated = false
     for(key <- watchKeys) {
+      // 如果该操作没完成，那么就返回false
       // If the operation is already completed, stop adding it to the rest of the watcher list.
       if (operation.isCompleted)
         return false
+      // watch这个key和对应的操作
       watchForOperation(key, operation)
 
       if (!watchCreated) {
@@ -283,14 +288,19 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
       }
     }
 
+    // 再尝试完成该操作
     isCompletedByMe = operation.maybeTryComplete()
-    if (isCompletedByMe)
+    if (isCompletedByMe)//如果已经完成，那么就返回true
       return true
 
     // if it cannot be completed by now and hence is watched, add to the expire queue also
     if (!operation.isCompleted) {
-      if (timerEnabled)
+      // 对于没有立即完成的任务,放入过期队列中
+      if (timerEnabled) {
+        // 放入到时间轮里
         timeoutTimer.add(operation)
+      }
+      // 如果该任务已经完成了，那么取消
       if (operation.isCompleted) {
         // cancel the timer task
         operation.cancel()
@@ -348,8 +358,10 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    * grab the removeWatchersLock to avoid the operation being added to a removed watcher list
    */
   private def watchForOperation(key: Any, operation: T) {
+    // 根据key的hash值，算出该key应该放入到那个watcher链表中
     val wl = watcherList(key)
     inLock(wl.watchersLock) {
+      // 获取对应的watcher，并将该操作对象放入该watcher中
       val watcher = wl.watchersByKey.getAndMaybePut(key)
       watcher.watch(operation)
     }
@@ -384,26 +396,30 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    * A linked list of watched delayed operations based on some key
    */
   private class Watchers(val key: Any) {
+    // 并发操作队列
     private[this] val operations = new ConcurrentLinkedQueue[T]()
-
+    // 计算当前监视的操作数。这是O（n），所以如果可能的话，请使用isEmpty（）
     // count the current number of watched operations. This is O(n), so use isEmpty() if possible
     def countWatched: Int = operations.size
 
     def isEmpty: Boolean = operations.isEmpty
 
+    // 添加一个operation对象
     // add the element to watch
     def watch(t: T) {
       operations.add(t)
     }
 
+    // 遍历列表并尝试完成一些关注的元素
     // traverse the list and try to complete some watched elements
     def tryCompleteWatched(): Int = {
       var completed = 0
 
+      //遍历operations列表，将可以完成的操作，尝试完成然后移除掉
       val iter = operations.iterator()
       while (iter.hasNext) {
         val curr = iter.next()
-        if (curr.isCompleted) {
+        if (curr.isCompleted) {//如果已经完成了,就移除
           // another thread has completed this operation, just remove it
           iter.remove()
         } else if (curr.maybeTryComplete()) {
@@ -411,6 +427,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
           completed += 1
         }
       }
+
 
       if (operations.isEmpty)
         removeKeyIfEmpty(key, this)

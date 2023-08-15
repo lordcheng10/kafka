@@ -22,7 +22,18 @@ import java.util.concurrent.DelayQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 /*
+ * 分层计时轮
  * Hierarchical Timing Wheels
+ *
+ * 一个简单的定时轮是一个定时器任务桶的循环列表。让u作为时间单位。大小为n的定时轮有n个桶，
+ * 可以在n*u个时间间隔内保存计时器任务。每个bucket保存属于相应时间范围的计时器任务。
+ * 一开始，第一个bucket保存[0，u）的任务，第二个bucket存储[u，2u），…的任务，
+ * 以及[u*（n-1），u*n）的第n个bucket。每个时间单位u的间隔，计时器都会滴答作响，
+ * 并移动到下一个bucket，然后使其中的所有计时器任务过期。因此，
+ * 计时器永远不会在当前时间将任务插入到bucket中，因为它已经过期。计时器会立即运行过期的任务。
+ * 然后，清空的bucket可用于下一轮，因此，如果当前bucket的时间为t，
+ * 则它将在tick后成为[t+u*n，t+（n+1）*u）的bucket。定时轮的插入/删除（启动计时器/停止计时器）成本为O（1），
+ * 而基于优先级队列的计时器，如java.util.concurrent.De
  *
  * A simple timing wheel is a circular list of buckets of timer tasks. Let u be the time unit.
  * A timing wheel with size n has n buckets and can hold timer tasks in n * u time interval.
@@ -96,6 +107,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * This class is not thread-safe. There should not be any add calls while advanceClock is executing.
  * It is caller's responsibility to enforce it. Simultaneous add calls are thread-safe.
  */
+/**
+ * tickMs: 每一刻度大小；
+ * wheelSize: 有多少个刻度;
+ * startMs: 开始时间;
+ *
+ * */
 @nonthreadsafe
 private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, taskCounter: AtomicInteger, queue: DelayQueue[TimerTaskList]) {
 
