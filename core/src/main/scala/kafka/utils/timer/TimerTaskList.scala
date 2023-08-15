@@ -106,6 +106,7 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
     }
   }
 
+  // 删除所有任务条目，并将提供的函数应用于每个条目
   // Remove all task entries and apply the supplied function to each of them
   def flush(f: TimerTaskEntry =>Unit): Unit = {
     synchronized {

@@ -121,6 +121,7 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
 
   private[this] var currentTime = startMs - (startMs % tickMs) // rounding down to multiple of tickMs
 
+  // overlowWheel可能由两个并发线程通过add（）进行更新和读取。
   // overflowWheel can potentially be updated and read by two concurrent threads through add().
   // Therefore, it needs to be volatile due to the issue of Double-Checked Locking pattern with JVM
   @volatile private[this] var overflowWheel: TimingWheel = null
@@ -140,20 +141,22 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
   }
 
   def add(timerTaskEntry: TimerTaskEntry): Boolean = {
+    // 获取该任务的过期时间
     val expiration = timerTaskEntry.expirationMs
 
-    if (timerTaskEntry.cancelled) {
+    if (timerTaskEntry.cancelled) {//如果该任务已经取消了，那么就返回false
       // Cancelled
       false
-    } else if (expiration < currentTime + tickMs) {
+    } else if (expiration < currentTime + tickMs) {//如果已经过期了，也返回false
       // Already expired
       false
-    } else if (expiration < currentTime + interval) {
+    } else if (expiration < currentTime + interval) {//如果在当前轮次，那么就将该任务放入到对应buckets中
       // Put in its own bucket
-      val virtualId = expiration / tickMs
-      val bucket = buckets((virtualId % wheelSize.toLong).toInt)
-      bucket.add(timerTaskEntry)
+      val virtualId = expiration / tickMs // expiration是当前的时间戳，除以tickMs后，得到虚拟ID
+      val bucket = buckets((virtualId % wheelSize.toLong).toInt) // 获取到对应的bucket
+      bucket.add(timerTaskEntry)//将任务放入到对应的bucket中
 
+      // 设置过期时间，这里可能会比实际的时间少一些
       // Set the bucket expiration time
       if (bucket.setExpiration(virtualId * tickMs)) {
         // The bucket needs to be enqueued because it was an expired bucket
@@ -165,17 +168,21 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
       }
       true
     } else {
+      // 如果该任务的过期时间超过了当前的时间轮，那么将该任务放入到更上一层时间轮
       // Out of the interval. Put it into the parent timer
       if (overflowWheel == null) addOverflowWheel()
       overflowWheel.add(timerTaskEntry)
     }
   }
 
+  // 试着把时钟推进
   // Try to advance the clock
   def advanceClock(timeMs: Long): Unit = {
     if (timeMs >= currentTime + tickMs) {
+      // 更新当前时间
       currentTime = timeMs - (timeMs % tickMs)
 
+      // 推进父时间轮的时间
       // Try to advance the clock of the overflow wheel if present
       if (overflowWheel != null) overflowWheel.advanceClock(currentTime)
     }

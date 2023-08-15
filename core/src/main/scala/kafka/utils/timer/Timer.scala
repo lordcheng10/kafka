@@ -32,9 +32,12 @@ trait Timer {
   def add(timerTask: TimerTask): Unit
 
   /**
-    * Advance the internal clock, executing any tasks whose expiration has been
+   * 提前内部时钟，执行在经过的超时时间内到期的任何任务。
+   *
+   * Advance the internal clock, executing any tasks whose expiration has been
     * reached within the duration of the passed timeout.
-    * @param timeoutMs
+   *
+   * @param timeoutMs
     * @return whether or not any tasks were executed
     */
   def advanceClock(timeoutMs: Long): Boolean
@@ -81,6 +84,7 @@ class SystemTimer(executorName: String,
   def add(timerTask: TimerTask): Unit = {
     readLock.lock()
     try {
+      // 构建一个TimerTaskEntry
       addTimerTaskEntry(new TimerTaskEntry(timerTask, timerTask.delayMs + Time.SYSTEM.hiResClockMs))
     } finally {
       readLock.unlock()
@@ -88,9 +92,9 @@ class SystemTimer(executorName: String,
   }
 
   private def addTimerTaskEntry(timerTaskEntry: TimerTaskEntry): Unit = {
-    if (!timingWheel.add(timerTaskEntry)) {
+    if (!timingWheel.add(timerTaskEntry)) {// 放入时间轮
       // Already expired or cancelled
-      if (!timerTaskEntry.cancelled)
+      if (!timerTaskEntry.cancelled)// 如果加入时间轮失败，并且该任务还没有取消，那么就直接提交到线程池运行
         taskExecutor.submit(timerTaskEntry.timerTask)
     }
   }
@@ -102,13 +106,17 @@ class SystemTimer(executorName: String,
    * waits up to timeoutMs before giving up.
    */
   def advanceClock(timeoutMs: Long): Boolean = {
+    // 首先从队列中取出到期的bucket
     var bucket = delayQueue.poll(timeoutMs, TimeUnit.MILLISECONDS)
     if (bucket != null) {
       writeLock.lock()
       try {
         while (bucket != null) {
+          // 尝试推进时间轮的时间
           timingWheel.advanceClock(bucket.getExpiration())
+          // 遍历该bucket中的每个task，然后执行reinsert，并从bucket链表中移除该任务
           bucket.flush(reinsert)
+          // 继续从队列中poll，如果poll出来为null，表示没有满足条件的任务了，那么退出循环
           bucket = delayQueue.poll()
         }
       } finally {
