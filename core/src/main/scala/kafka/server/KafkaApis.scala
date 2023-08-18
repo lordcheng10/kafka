@@ -1299,7 +1299,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         joinGroupRequest.rebalanceTimeout,//rebalance超时时间,对应客户端配置是max.poll.interval.ms，默认值是5分钟，但如果是v0版本，那么这里的rebalance时间就是session timeout时间
         joinGroupRequest.sessionTimeout,//session超时时间，客户端如果没有显示配置的话，默认值是10秒
         joinGroupRequest.protocolType,//协议类型: 这里的协议类型是consumer
-        protocols,//协议元数据: 包括订阅的topic以及配置的分区分配策略
+        protocols,//协议元数据: [consumer分区分配策略名，byte(该consumer订阅的topic和负责的分区)]
         sendResponseCallback)//回复response的call back
     }
   }

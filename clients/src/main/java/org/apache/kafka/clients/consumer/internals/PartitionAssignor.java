@@ -73,7 +73,9 @@ public interface PartitionAssignor {
     String name();
 
     class Subscription {
+        // 订阅了哪些topic
         private final List<String> topics;
+        // 当前consumer负责哪些分区
         private final ByteBuffer userData;
 
         public Subscription(List<String> topics, ByteBuffer userData) {
