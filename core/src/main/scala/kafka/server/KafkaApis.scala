@@ -290,92 +290,127 @@ class KafkaApis(val requestChannel: RequestChannel,
    * Handle an offset commit request
    */
   def handleOffsetCommitRequest(request: RequestChannel.Request) {
+    // 拿到header对象
     val header = request.header
+    // 转换成OffsetCommitRequest请求对象
     val offsetCommitRequest = request.body[OffsetCommitRequest]
 
+    // 如果该group没有授权，那么就拒绝掉该请求
     // reject the request if not authorized to the group
     if (!authorize(request.session, Read, Resource(Group, offsetCommitRequest.groupId, LITERAL))) {
+      // 如果权限不通过，那么就返回授权失败的错误码，并返回response
       val error = Errors.GROUP_AUTHORIZATION_FAILED
       val results = offsetCommitRequest.offsetData.keySet.asScala.map { topicPartition =>
         (topicPartition, error)
       }.toMap
       sendResponseMaybeThrottle(request, requestThrottleMs => new OffsetCommitResponse(requestThrottleMs, results.asJava))
-    } else {
+    } else {// 如果该group有权限，就做下面的操作
 
+      // 将没权限的topic选出来
       val unauthorizedTopicErrors = mutable.Map[TopicPartition, Errors]()
+      // 将不存在的topic选出来
       val nonExistingTopicErrors = mutable.Map[TopicPartition, Errors]()
+      // 将已经首选的toic返回出来
       val authorizedTopicRequestInfoBldr = immutable.Map.newBuilder[TopicPartition, OffsetCommitRequest.PartitionData]
 
+      // 遍历该offset commit请求中的offset数据
       for ((topicPartition, partitionData) <- offsetCommitRequest.offsetData.asScala) {
-        if (!authorize(request.session, Read, Resource(Topic, topicPartition.topic, LITERAL)))
+        // 检查该会话session是否有该topic的读权限
+        if (!authorize(request.session, Read, Resource(Topic, topicPartition.topic, LITERAL))) {
+          // 如果没有该topic的读权限，那么自然就不能对该topic commit offset
           unauthorizedTopicErrors += (topicPartition -> Errors.TOPIC_AUTHORIZATION_FAILED)
-        else if (!metadataCache.contains(topicPartition))
+        } else if (!metadataCache.contains(topicPartition)) {//检查该分区是否存在(不是检查topic，因为topic可能存在，但是分区超过了最大分区)
+          // 如果不存在，就放入到不存在的集合中
           nonExistingTopicErrors += (topicPartition -> Errors.UNKNOWN_TOPIC_OR_PARTITION)
-        else
+        } else {
+          // 最后将满足授权和存在的分区以及metadata，放入集合中
           authorizedTopicRequestInfoBldr += (topicPartition -> partitionData)
+        }
       }
 
+      // 将满足条件的map筛选出来
       val authorizedTopicRequestInfo = authorizedTopicRequestInfoBldr.result()
 
+      // 发送offset commit的response
       // the callback for sending an offset commit response
       def sendResponseCallback(commitStatus: immutable.Map[TopicPartition, Errors]) {
+        // commitStatus是authorizedTopicRequestInfo对应的错误码，加上其他两个不满足条件的map（前面已经给了错误码），就是全部分区的错误码
         val combinedCommitStatus = commitStatus ++ unauthorizedTopicErrors ++ nonExistingTopicErrors
-        if (isDebugEnabled)
+        if (isDebugEnabled)//检查是否开启了debug，如果开启了的话，需要将所有失败的分区以及对应错误码输出
           combinedCommitStatus.foreach { case (topicPartition, error) =>
             if (error != Errors.NONE) {
               debug(s"Offset commit request with correlation id ${header.correlationId} from client ${header.clientId} " +
                 s"on partition $topicPartition failed due to ${error.exceptionName}")
             }
           }
+
+        // 发送response
         sendResponseMaybeThrottle(request, requestThrottleMs =>
           new OffsetCommitResponse(requestThrottleMs, combinedCommitStatus.asJava))
       }
 
-      if (authorizedTopicRequestInfo.isEmpty)
+      // 检查满足条件的分区是否为空
+      if (authorizedTopicRequestInfo.isEmpty) {
+        // 如果为空，那么就直接回复空状态
         sendResponseCallback(Map.empty)
-      else if (header.apiVersion == 0) {
+      } else if (header.apiVersion == 0) {
+        // 对于version为0的，那么就直接提交到zk上
         // for version 0 always store offsets to ZK
         val responseInfo = authorizedTopicRequestInfo.map {
+              // 遍历每个分区的offset相关信息
           case (topicPartition, partitionData) =>
             try {
+              // 如果分区的metadata元数据不为null，并且长度大于配置的最大size，那么就回复OFFSET_METADATA_TOO_LARGE
               if (partitionData.metadata != null && partitionData.metadata.length > config.offsetMetadataMaxSize)
                 (topicPartition, Errors.OFFSET_METADATA_TOO_LARGE)
               else {
+                // 否则就写入到zk上,这里只把topic 分区 groupid和offset记录到zk上了
                 zkClient.setOrCreateConsumerOffset(offsetCommitRequest.groupId, topicPartition, partitionData.offset)
                 (topicPartition, Errors.NONE)
               }
             } catch {
+                  // 如果抛其他异常，就直接返回对应错误码
               case e: Throwable => (topicPartition, Errors.forException(e))
             }
         }
+        // 将收集到的分区状态码进行发送
         sendResponseCallback(responseInfo)
       } else {
+        // 如果版本号是1以及更高版本，那么就存放等到topic中
         // for version 1 and beyond store offsets in offset manager
 
+        // 默认的过期时间是当前时间加上retention时间(retention可能被覆盖在v2版本)
         // "default" expiration timestamp is now + retention (and retention may be overridden if v2)
-        // expire timestamp is computed differently for v1 and v2.
+        // expire timestamp is computed differently for v1 and v2.//v1和v2的过期时间计算是不一样的
+        // 如果v1没有提供明确的提交时间戳，我们将其视为v5。
         //   - If v1 and no explicit commit timestamp is provided we treat it the same as v5.
+        // 如果提供了v1和显式保留时间，我们将基于此计算过期时间戳
         //   - If v1 and explicit retention time is provided we calculate expiration timestamp based on that
+        // 如果v2/v3/v4（没有明确的提交时间戳），我们将其视为v5。
         //   - If v2/v3/v4 (no explicit commit timestamp) we treat it the same as v5.
+        // 对于v5及更高版本，没有每个分区的过期时间戳，因此该字段不再有效
         //   - For v5 and beyond there is no per partition expiration timestamp, so this field is no longer in effect
         val currentTimestamp = time.milliseconds
-        val partitionData = authorizedTopicRequestInfo.mapValues { partitionData =>
+        // 这里构建的一个map
+        val partitionData = authorizedTopicRequestInfo.mapValues { partitionData =>//遍历每个分区数据
+          // 获取metadata: offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata],
           val metadata = if (partitionData.metadata == null) OffsetAndMetadata.NoMetadata else partitionData.metadata
           new OffsetAndMetadata(
-            offset = partitionData.offset,
-            leaderEpoch = partitionData.leaderEpoch,
-            metadata = metadata,
-            commitTimestamp = partitionData.timestamp match {
+            offset = partitionData.offset,// offset
+            leaderEpoch = partitionData.leaderEpoch,// leader epoch
+            metadata = metadata,// metadata
+            commitTimestamp = partitionData.timestamp match {//提交时间，如果该值为-1，那么就去当前时间
               case OffsetCommitRequest.DEFAULT_TIMESTAMP => currentTimestamp
-              case customTimestamp => customTimestamp
+              case customTimestamp => customTimestamp// 这里不是都取当前时间吗
             },
-            expireTimestamp = offsetCommitRequest.retentionTime match {
+            expireTimestamp = offsetCommitRequest.retentionTime match {// 过期时间，如果是-1，说明没有该字段，否则就是当前时间+retention
               case OffsetCommitRequest.DEFAULT_RETENTION_TIME => None
               case retentionTime => Some(currentTimestamp + retentionTime)
             }
           )
         }
 
+        // 调用coordinator的回调来处理offset提交
         // call coordinator to handle commit offset
         groupCoordinator.handleCommitOffsets(
           offsetCommitRequest.groupId,

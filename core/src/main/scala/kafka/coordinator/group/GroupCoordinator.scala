@@ -595,22 +595,27 @@ class GroupCoordinator(val brokerId: Int,
                           generationId: Int,
                           offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata],
                           responseCallback: immutable.Map[TopicPartition, Errors] => Unit) {
-    validateGroupStatus(groupId, ApiKeys.OFFSET_COMMIT) match {
-      case Some(error) => responseCallback(offsetMetadata.mapValues(_ => error))
-      case None =>
-        groupManager.getGroup(groupId) match {
-          case None =>
-            if (generationId < 0) {
+    validateGroupStatus(groupId, ApiKeys.OFFSET_COMMIT) match {// 首先校验group的状态
+      case Some(error) => responseCallback(offsetMetadata.mapValues(_ => error))// 如果有错误，直接触发回调
+      case None =>// 如果没错误
+        groupManager.getGroup(groupId) match {//获取group
+          case None =>// 如果没有该group
+            if (generationId < 0) {//这个generationId是join group生成的哪个吗?
+              //如果是generationId小于0，那么group是不依赖group manager，可以提交
               // the group is not relying on Kafka for group management, so allow the commit
+              // 直接创建group，然后提交offset
               val group = groupManager.addGroup(new GroupMetadata(groupId, Empty, time))
+              // 处理offset提交
               doCommitOffsets(group, memberId, generationId, NO_PRODUCER_ID, NO_PRODUCER_EPOCH,
                 offsetMetadata, responseCallback)
             } else {
+              // 或者这是老一辈的要求。无论哪种方式，都要拒绝提交
               // or this is a request coming from an older generation. either way, reject the commit
               responseCallback(offsetMetadata.mapValues(_ => Errors.ILLEGAL_GENERATION))
             }
 
-          case Some(group) =>
+          case Some(group) =>// 如果group存在
+            // 处理offset提交
             doCommitOffsets(group, memberId, generationId, NO_PRODUCER_ID, NO_PRODUCER_EPOCH,
               offsetMetadata, responseCallback)
         }
