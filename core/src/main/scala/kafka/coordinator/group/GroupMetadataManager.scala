@@ -298,47 +298,59 @@ class GroupMetadataManager(brokerId: Int,
                    responseCallback: immutable.Map[TopicPartition, Errors] => Unit,
                    producerId: Long = RecordBatch.NO_PRODUCER_ID,
                    producerEpoch: Short = RecordBatch.NO_PRODUCER_EPOCH): Unit = {
+    // 首先过滤掉偏移量元数据大小超过限制的分区
     // first filter out partitions with offset metadata size exceeding limit
     val filteredOffsetMetadata = offsetMetadata.filter { case (_, offsetAndMetadata) =>
       validateOffsetMetadataLength(offsetAndMetadata.metadata)
     }
 
     group.inLock {
+      // 事务offset和group offset不能同时接收
       if (!group.hasReceivedConsistentOffsetCommits)
         warn(s"group: ${group.groupId} with leader: ${group.leaderOrNull} has received offset commits from consumers as well " +
           s"as transactional producers. Mixing both types of offset commits will generally result in surprises and " +
           s"should be avoided.")
     }
 
+    // 是否是事务提交
     val isTxnOffsetCommit = producerId != RecordBatch.NO_PRODUCER_ID
     // construct the message set to append
-    if (filteredOffsetMetadata.isEmpty) {
+    if (filteredOffsetMetadata.isEmpty) {// 如果所有分区的元数据都超过了，metadata的最大大小，那么就直接回复错误码
       // compute the final error codes for the commit response
       val commitStatus = offsetMetadata.mapValues(_ => Errors.OFFSET_METADATA_TOO_LARGE)
       responseCallback(commitStatus)
       None
     } else {
-      getMagic(partitionFor(group.groupId)) match {
+      getMagic(partitionFor(group.groupId)) match {//提取存储的版本
         case Some(magicValue) =>
+          // 我们总是使用 CREATE_TIME，就像生产者一样。 到 LOG_APPEND_TIME 的转换（如果需要）会自动发生
           // We always use CREATE_TIME, like the producer. The conversion to LOG_APPEND_TIME (if necessary) happens automatically.
           val timestampType = TimestampType.CREATE_TIME
           val timestamp = time.milliseconds()
 
           val records = filteredOffsetMetadata.map { case (topicPartition, offsetAndMetadata) =>
+            // key是groupId+topic+partition
             val key = GroupMetadataManager.offsetCommitKey(group.groupId, topicPartition)
+            // value是offsetMetadata来构造的，当然会兼顾interBrokerProtocolVersion对应的内部broker版本
             val value = GroupMetadataManager.offsetCommitValue(offsetAndMetadata, interBrokerProtocolVersion)
             new SimpleRecord(timestamp, key, value)
           }
+          // 获取offset对应的分区
           val offsetTopicPartition = new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, partitionFor(group.groupId))
+          // 按照生成的数据大小，申请buffer
           val buffer = ByteBuffer.allocate(AbstractRecords.estimateSizeInBytes(magicValue, compressionType, records.asJava))
 
+          // 如果是事务提交，那么就检查magicValue
           if (isTxnOffsetCommit && magicValue < RecordBatch.MAGIC_VALUE_V2)
             throw Errors.UNSUPPORTED_FOR_MESSAGE_FORMAT.exception("Attempting to make a transaction offset commit with an invalid magic: " + magicValue)
 
+          // 构建memry records
           val builder = MemoryRecords.builder(buffer, magicValue, compressionType, timestampType, 0L, time.milliseconds(),
             producerId, producerEpoch, 0, isTxnOffsetCommit, RecordBatch.NO_PARTITION_LEADER_EPOCH)
 
+          // 将record写入builder
           records.foreach(builder.append)
+          // 然后最后生成entry
           val entries = Map(offsetTopicPartition -> builder.build())
 
           // set the callback function to insert offsets into cache after log append completed
@@ -411,17 +423,18 @@ class GroupMetadataManager(brokerId: Int,
             responseCallback(commitStatus)
           }
 
-          if (isTxnOffsetCommit) {
+          if (isTxnOffsetCommit) {//如果是事务提交
             group.inLock {
               addProducerGroup(producerId, group.groupId)
               group.prepareTxnOffsetCommit(producerId, offsetMetadata)
             }
-          } else {
+          } else {//否则
             group.inLock {
               group.prepareOffsetCommit(offsetMetadata)
             }
           }
 
+          // 实际写入磁盘
           appendForGroup(group, entries, putCacheCallback)
 
         case None =>
@@ -1124,6 +1137,8 @@ object GroupMetadataManager {
                                        apiVersion: ApiVersion): Array[Byte] = {
     // generate commit value according to schema version
     val (version, value) = {
+      // 如果kafka broker内部版本小于2.1或offsetAndMetadata中的过期时间为非none,
+      // 那么value组成为：offset+metadata+commitTimestamp+expireTimestamp
       if (apiVersion < KAFKA_2_1_IV0 || offsetAndMetadata.expireTimestamp.nonEmpty) {
         val value = new Struct(OFFSET_COMMIT_VALUE_SCHEMA_V1)
         value.set(OFFSET_VALUE_OFFSET_FIELD_V1, offsetAndMetadata.offset)
@@ -1134,12 +1149,14 @@ object GroupMetadataManager {
           offsetAndMetadata.expireTimestamp.getOrElse(OffsetCommitRequest.DEFAULT_TIMESTAMP))
         (1, value)
       } else if (apiVersion < KAFKA_2_1_IV1) {
+        //如果是小于2.1.1，那么value组成为: offset+metadata+commitTimestamp
         val value = new Struct(OFFSET_COMMIT_VALUE_SCHEMA_V2)
         value.set(OFFSET_VALUE_OFFSET_FIELD_V2, offsetAndMetadata.offset)
         value.set(OFFSET_VALUE_METADATA_FIELD_V2, offsetAndMetadata.metadata)
         value.set(OFFSET_VALUE_COMMIT_TIMESTAMP_FIELD_V2, offsetAndMetadata.commitTimestamp)
         (2, value)
       } else {
+        //如果是更高的版本，那么value组成为：offset+leaderEpoch+metadata+commitTimestamp
         val value = new Struct(OFFSET_COMMIT_VALUE_SCHEMA_V3)
         value.set(OFFSET_VALUE_OFFSET_FIELD_V3, offsetAndMetadata.offset)
         value.set(OFFSET_VALUE_LEADER_EPOCH_FIELD_V3,
@@ -1150,6 +1167,7 @@ object GroupMetadataManager {
       }
     }
 
+    // 将版本和数据写入buffer中
     val byteBuffer = ByteBuffer.allocate(2 /* version */ + value.sizeOf)
     byteBuffer.putShort(version.toShort)
     value.writeTo(byteBuffer)

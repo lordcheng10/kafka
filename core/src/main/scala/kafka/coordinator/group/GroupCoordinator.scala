@@ -600,8 +600,9 @@ class GroupCoordinator(val brokerId: Int,
       case None =>// 如果没错误
         groupManager.getGroup(groupId) match {//获取group
           case None =>// 如果没有该group
-            if (generationId < 0) {//这个generationId是join group生成的哪个吗?
-              //如果是generationId小于0，那么group是不依赖group manager，可以提交
+            if (generationId < 0) {//这个generationId是join group生成的,没触发一次rebalance，就会触发一轮join group，那么该变量就会自增1
+              //如果是generationId小于0，那么说明该group是第一次加入，所以可以创建group，
+              // 否则的话，说明该group经历了多轮join后，可能服务端将其删除了，此时客户端如果再提交offset就会拒绝，因为你既然要删除该group，就没必要再创建了
               // the group is not relying on Kafka for group management, so allow the commit
               // 直接创建group，然后提交offset
               val group = groupManager.addGroup(new GroupMetadata(groupId, Empty, time))
@@ -637,12 +638,16 @@ class GroupCoordinator(val brokerId: Int,
                               producerEpoch: Short,
                               offsetMetadata: immutable.Map[TopicPartition, OffsetAndMetadata],
                               responseCallback: immutable.Map[TopicPartition, Errors] => Unit) {
-    group.inLock {
-      if (group.is(Dead)) {
+    group.inLock {//首先对该group加锁
+      if (group.is(Dead)) {// 如果该group是Dead，那么直接回复错误码
         responseCallback(offsetMetadata.mapValues(_ => Errors.UNKNOWN_MEMBER_ID))
       } else if ((generationId < 0 && group.is(Empty)) || (producerId != NO_PRODUCER_ID)) {
+        //如果generationId小于0，并且该group是Empty或producerId不等于-1(producerId用于事务)，那么就存储该offset
+        // 该小组仅使用 Kafka 来存储偏移量。
         // The group is only using Kafka to store offsets.
+        // 此外，对于事务偏移提交，我们不需要验证组成员身份和生成。
         // Also, for transactional offset commits we don't need to validate group membership and the generation.
+        // 将group、 memberId、offsetMetadata以及producerId和epoch存储（后面两个是为了事务做的）
         groupManager.storeOffsets(group, memberId, offsetMetadata, responseCallback, producerId, producerEpoch)
       } else if (group.is(CompletingRebalance)) {
         responseCallback(offsetMetadata.mapValues(_ => Errors.REBALANCE_IN_PROGRESS))

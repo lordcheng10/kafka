@@ -1177,28 +1177,37 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     }
 
     private ConsumerRecords<K, V> poll(final Timer timer, final boolean includeMetadataInTimeout) {
+        // 保证线程安全(只能有一个线程使用)和确认该consumer没有关闭
         acquireAndEnsureOpen();
         try {
+            // 如果没有订阅类型，那么直接抛异常
             if (this.subscriptions.hasNoSubscriptionOrUserAssignment()) {
                 throw new IllegalStateException("Consumer is not subscribed to any topics or assigned any partitions");
             }
 
+            // 拉取数据，知道超时时间达到
             // poll for new data until the timeout expires
             do {
+                // 往外抛异常，让用户不用一直阻塞，从而唤醒用户
                 client.maybeTriggerWakeup();
 
+                // includeMetadataInTimeout表示获取分配方案以及获取fetch 的position位置这个动作，是否要包含在超时时间内
                 if (includeMetadataInTimeout) {
+                    // 如果获取分配方案等操作要包含在超时时间内，那么就需要把超时timer传入进去
                     if (!updateAssignmentMetadataIfNeeded(timer)) {
                         return ConsumerRecords.empty();
                     }
                 } else {
+                    // 否则就一直要等到获取到方案
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE))) {
                         log.warn("Still waiting for metadata");
                     }
                 }
 
+                // 获取fetch到的数据
                 final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(timer);
                 if (!records.isEmpty()) {
+                    // 如果不为空，，那么发送下一个fetch请求，这样用户外围在处理数据时，处理完后，在poll的时候，resposne就已经来了，不用专门等response
                     // before returning the fetched records, we can send off the next round of fetches
                     // and avoid block waiting for their responses to enable pipelining while the user
                     // is handling the fetched records.
@@ -1206,13 +1215,16 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     // NOTE: since the consumed position has already been updated, we must not allow
                     // wakeups or any other errors to be triggered prior to returning the fetched records.
                     if (fetcher.sendFetches() > 0 || client.hasPendingRequests()) {
+                        // 如果当前有可发送的请求，那么就再进行一轮收发包
                         client.pollNoWakeup();
                     }
 
+                    //调用拦截器，并返回fetch到的数据
                     return this.interceptors.onConsume(new ConsumerRecords<>(records));
                 }
             } while (timer.notExpired());
 
+            // 如果超时后都没fetch到数据，就返回空records
             return ConsumerRecords.empty();
         } finally {
             release();
