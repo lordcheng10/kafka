@@ -31,21 +31,14 @@ import scala.collection._
 import scala.collection.mutable.ListBuffer
 
 /**
- * 一种操作，其处理最多需要延迟给定的延迟时间。例如，延迟的生产操作可能正在等待指定数量的ack；或者延迟的获取操作可能正在等待给定数量的字节累积。
  * An operation whose processing needs to be delayed for at most the given delayMs. For example
  * a delayed produce operation could be waiting for specified number of acks; or
  * a delayed fetch operation could be waiting for a given number of bytes to accumulate.
- *
- *  完成延迟操作时的逻辑在onComplete（）中定义，并且将只调用一次。一旦操作完成，isCompleted（）将返回true。
- *  onComplete可以由forceComplete触发，如果操作尚未完成，
- *  它会在delayMs之后强制调用onComplete；或者tryComplete，它首先检查操作现在是否可以完成，如果是，则调用forceComple
  * The logic upon completing a delayed operation is defined in onComplete() and will be called exactly once.
  * Once an operation is completed, isCompleted() will return true. onComplete() can be triggered by either
  * forceComplete(), which forces calling onComplete() after delayMs if the operation is not yet completed,
  * or tryComplete(), which first checks if the operation can be completed or not now, and if yes calls
  * forceComplete().
- *
- * DelayedOperation的子类需要同时提供onComplete和tryComplete的实现
  * A subclass of DelayedOperation needs to provide an implementation of both onComplete() and tryComplete().
  */
 abstract class DelayedOperation(override val delayMs: Long,

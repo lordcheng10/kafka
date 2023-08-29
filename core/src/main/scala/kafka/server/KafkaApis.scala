@@ -1104,39 +1104,52 @@ class KafkaApis(val requestChannel: RequestChannel,
    * Handle an offset fetch request
    */
   def handleOffsetFetchRequest(request: RequestChannel.Request) {
+    // 获取请求的header
     val header = request.header
+    // 获取body
     val offsetFetchRequest = request.body[OffsetFetchRequest]
 
+    // 获取授权的分区
     def authorizeTopicDescribe(partition: TopicPartition) =
       authorize(request.session, Describe, Resource(Topic, partition.topic, LITERAL))
 
     def createResponse(requestThrottleMs: Int): AbstractResponse = {
-      val offsetFetchResponse =
+      // 创建offset response
+      val offsetFetchResponse = {
         // reject the request if not authorized to the group
+        // 鉴权
         if (!authorize(request.session, Describe, Resource(Group, offsetFetchRequest.groupId, LITERAL)))
           offsetFetchRequest.getErrorResponse(requestThrottleMs, Errors.GROUP_AUTHORIZATION_FAILED)
         else {
+          // 如果是verison为0
           if (header.apiVersion == 0) {
+            // 将请求的分区分为授权分区和未授权的分区
             val (authorizedPartitions, unauthorizedPartitions) = offsetFetchRequest.partitions.asScala
               .partition(authorizeTopicDescribe)
 
+            // 从zk中读取
             // version 0 reads offsets from ZK
             val authorizedPartitionData = authorizedPartitions.map { topicPartition =>
               try {
+                // 如果不存在该topic分区,那么就直接返回UNKNOWN_PARTITION错误码
                 if (!metadataCache.contains(topicPartition))
                   (topicPartition, OffsetFetchResponse.UNKNOWN_PARTITION)
                 else {
+                  // 否则就读取zk上记录的offset
                   val payloadOpt = zkClient.getConsumerOffset(offsetFetchRequest.groupId, topicPartition)
                   payloadOpt match {
                     case Some(payload) =>
+                      // 否则将对应的offset返回
                       (topicPartition, new OffsetFetchResponse.PartitionData(payload.toLong,
                         Optional.empty(), OffsetFetchResponse.NO_METADATA, Errors.NONE))
                     case None =>
+                      // 如果zk上没有该记录，那么直接返回UNKNOWN_PARTITION
                       (topicPartition, OffsetFetchResponse.UNKNOWN_PARTITION)
                   }
                 }
               } catch {
                 case e: Throwable =>
+                  // 如果有异常，那么直接回复对应的错误码
                   (topicPartition, new OffsetFetchResponse.PartitionData(OffsetFetchResponse.INVALID_OFFSET,
                     Optional.empty(), OffsetFetchResponse.NO_METADATA, Errors.forException(e)))
               }
@@ -1145,35 +1158,46 @@ class KafkaApis(val requestChannel: RequestChannel,
             val unauthorizedPartitionData = unauthorizedPartitions.map(_ -> OffsetFetchResponse.UNAUTHORIZED_PARTITION).toMap
             new OffsetFetchResponse(requestThrottleMs, Errors.NONE, (authorizedPartitionData ++ unauthorizedPartitionData).asJava)
           } else {
+            // 如果版本是1，那么就从kafka读取offset
             // versions 1 and above read offsets from Kafka
             if (offsetFetchRequest.isAllPartitions) {
+              // 如果没有指定分区，那么就是请求该groupId所有分区的offset
               val (error, allPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId)
-              if (error != Errors.NONE)
+              if (error != Errors.NONE)// 如果处理offset有错误，那么就回复error response
                 offsetFetchRequest.getErrorResponse(requestThrottleMs, error)
               else {
+                // 如果没有错误，就检查改group是否有describe group的权限
                 // clients are not allowed to see offsets for topics that are not authorized for Describe
                 val authorizedPartitionData = allPartitionData.filter { case (topicPartition, _) => authorizeTopicDescribe(topicPartition) }
+                // 然后再回复response
                 new OffsetFetchResponse(requestThrottleMs, Errors.NONE, authorizedPartitionData.asJava)
               }
             } else {
+              // 将授权和未授权的分区进行分类
               val (authorizedPartitions, unauthorizedPartitions) = offsetFetchRequest.partitions.asScala
                 .partition(authorizeTopicDescribe)
+              // 处理offset fetch
               val (error, authorizedPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId,
                 Some(authorizedPartitions))
+
+              // 如果有错误，那么就返回error response
               if (error != Errors.NONE)
                 offsetFetchRequest.getErrorResponse(requestThrottleMs, error)
               else {
+                // 否则再回复response
                 val unauthorizedPartitionData = unauthorizedPartitions.map(_ -> OffsetFetchResponse.UNAUTHORIZED_PARTITION).toMap
                 new OffsetFetchResponse(requestThrottleMs, Errors.NONE, (authorizedPartitionData ++ unauthorizedPartitionData).asJava)
               }
             }
           }
         }
+      }
 
       trace(s"Sending offset fetch response $offsetFetchResponse for correlation id ${header.correlationId} to client ${header.clientId}.")
       offsetFetchResponse
     }
 
+    // 发送response
     sendResponseMaybeThrottle(request, createResponse)
   }
 

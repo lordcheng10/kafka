@@ -448,29 +448,33 @@ class GroupMetadataManager(brokerId: Int,
   }
 
   /**
+   * 该 API 提供的最重要的保证是它永远不应该返回过时的偏移量。 即，它要么返回当前偏移量，要么开始从日志同步缓存（并返回错误代码）
    * The most important guarantee that this API provides is that it should never return a stale offset. i.e., it either
    * returns the current offset or it begins to sync the cache from the log (and returns an error code).
    */
   def getOffsets(groupId: String, topicPartitionsOpt: Option[Seq[TopicPartition]]): Map[TopicPartition, OffsetFetchResponse.PartitionData] = {
     trace("Getting offsets of %s for group %s.".format(topicPartitionsOpt.getOrElse("all partitions"), groupId))
+    // 获取groupId对应的group
     val group = groupMetadataCache.get(groupId)
-    if (group == null) {
+    if (group == null) {// 如果group不存在，那么就全部分区都返回INVALID_OFFSET
       topicPartitionsOpt.getOrElse(Seq.empty[TopicPartition]).map { topicPartition =>
         val partitionData = new OffsetFetchResponse.PartitionData(OffsetFetchResponse.INVALID_OFFSET,
           Optional.empty(), "", Errors.NONE)
         topicPartition -> partitionData
       }.toMap
     } else {
-      group.inLock {
-        if (group.is(Dead)) {
+      group.inLock {//持锁
+        if (group.is(Dead)) {// 检查该group是否是Dead状态,如果是Dead状态，那么也会返回INVALID_OFFSET
           topicPartitionsOpt.getOrElse(Seq.empty[TopicPartition]).map { topicPartition =>
             val partitionData = new OffsetFetchResponse.PartitionData(OffsetFetchResponse.INVALID_OFFSET,
               Optional.empty(), "", Errors.NONE)
             topicPartition -> partitionData
           }.toMap
         } else {
+          //其他状态才会真正去fetch offset
           topicPartitionsOpt match {
             case None =>
+              // 返回该消费者组拥有的所有分区的偏移量。 （这仅适用于向 Kafka 提交偏移量的消费者。）
               // Return offsets for all partitions owned by this consumer group. (this only applies to consumers
               // that commit offsets to Kafka.)
               group.allOffsets.map { case (topicPartition, offsetAndMetadata) =>
@@ -479,7 +483,9 @@ class GroupMetadataManager(brokerId: Int,
               }
 
             case Some(topicPartitions) =>
+              // 如果有对应的分区
               topicPartitions.map { topicPartition =>
+                // 那么从group中获取offset信息
                 val partitionData = group.offset(topicPartition) match {
                   case None =>
                     new OffsetFetchResponse.PartitionData(OffsetFetchResponse.INVALID_OFFSET,

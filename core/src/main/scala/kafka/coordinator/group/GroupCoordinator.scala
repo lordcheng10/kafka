@@ -663,12 +663,16 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  // 处理具体某个分区对应的groupId的offset
   def handleFetchOffsets(groupId: String, partitions: Option[Seq[TopicPartition]] = None):
   (Errors, Map[TopicPartition, OffsetFetchResponse.PartitionData]) = {
 
+    // 首先检查group的状态是否正常
     validateGroupStatus(groupId, ApiKeys.OFFSET_FETCH) match {
+      // 如果状态不对，那么对应的offset就返回空，并且带有错误码
       case Some(error) => error -> Map.empty
       case None =>
+        // 无论当前组状态如何，都盲目返回偏移量，因为组可能正在使用 Kafka 提交存储而没有自动组管理
         // return offsets blindly regardless the current group state since the group may be using
         // Kafka commit storage without automatic group management
         (Errors.NONE, groupManager.getOffsets(groupId, partitions))
