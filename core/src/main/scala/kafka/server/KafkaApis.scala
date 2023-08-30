@@ -1389,16 +1389,21 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleDeleteGroupsRequest(request: RequestChannel.Request): Unit = {
+    // 请求转换
     val deleteGroupsRequest = request.body[DeleteGroupsRequest]
+    // 获取要删除的group
     val groups = deleteGroupsRequest.groups.asScala.toSet
 
+    // 将要删除的group进行分类：有删除权限的和没删除权限的
     val (authorizedGroups, unauthorizedGroups) = groups.partition { group =>
       authorize(request.session, Delete, Resource(Group, group, LITERAL))
     }
 
+    // 进行实际的删除，返回删除结果（对于没有权限的group，直接构建权限失败的的错误码）
     val groupDeletionResult = groupCoordinator.handleDeleteGroups(authorizedGroups) ++
       unauthorizedGroups.map(_ -> Errors.GROUP_AUTHORIZATION_FAILED)
 
+    // 回复response
     sendResponseMaybeThrottle(request, requestThrottleMs =>
       new DeleteGroupsResponse(requestThrottleMs, groupDeletionResult.asJava))
   }

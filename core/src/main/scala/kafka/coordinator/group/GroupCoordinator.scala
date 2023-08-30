@@ -469,29 +469,42 @@ class GroupCoordinator(val brokerId: Int,
   }
 
   def handleDeleteGroups(groupIds: Set[String]): Map[String, Errors] = {
+    // 记录每个group的处理错误码
     var groupErrors: Map[String, Errors] = Map()
+    // 将符合删除条件的组筛选出来
     var groupsEligibleForDeletion: Seq[GroupMetadata] = Seq()
 
+    // 遍历每个组
     groupIds.foreach { groupId =>
+      // 检查组的状态
       validateGroupStatus(groupId, ApiKeys.DELETE_GROUPS) match {
-        case Some(error) =>
+        case Some(error) =>//如果有错误，就直接放入groupErrors
           groupErrors += groupId -> error
 
         case None =>
-          groupManager.getGroup(groupId) match {
+          groupManager.getGroup(groupId) match {//获取group
             case None =>
+              // 检查下是否是真的不存在：上面只是检查了内存中不存在该group，可能是该group不是当前节点负责的，
+              // 所以还需要检查下是否是自己负责的，如果是自己负责，并且还不存在，那么才是真正不存在;或者是自己负责该group，
+              // 并且存在该group，但是该group的状态是Dead，那么也算不存在，因为该group是要被删除的;
+              // 这里由于上面判断了内存中不存在该group，所以groupNotExists实际就只是判断是否是自己负责该group，
+              // 如果是，那么就返回GROUP_ID_NOT_FOUND,表示该group不存在，否则就返回NOT_COORDINATOR表示不是该group的coordinator
               groupErrors += groupId ->
                 (if (groupManager.groupNotExists(groupId)) Errors.GROUP_ID_NOT_FOUND else Errors.NOT_COORDINATOR)
             case Some(group) =>
+              // 存在该group，那么加锁判断状态
               group.inLock {
                 group.currentState match {
-                  case Dead =>
+                  case Dead =>//如果是Dead状态,那么就再次判断groupNotExists，groupNotExists方法只需要判断是否是自己负责的就可以了，后面一个条件在这里肯定是true
                     groupErrors += groupId ->
+                    // 如果返回GROUP_ID_NOT_FOUND，表面已经被删除了，不需要再删除了，如果返回的是NOT_COORDINATOR，说明leader做了切换，需要重新发起删除请求
                       (if (groupManager.groupNotExists(groupId)) Errors.GROUP_ID_NOT_FOUND else Errors.NOT_COORDINATOR)
                   case Empty =>
+                    // 只有是Empty状态才能进行删除操作
                     group.transitionTo(Dead)
                     groupsEligibleForDeletion :+= group
                   case _ =>
+                    // 如果不是Empty状态,就不能删除
                     groupErrors += groupId -> Errors.NON_EMPTY_GROUP
                 }
               }

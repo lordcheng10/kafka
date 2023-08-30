@@ -161,6 +161,7 @@ class GroupMetadataManager(brokerId: Int,
 
   def isLoading: Boolean = inLock(partitionLock) { loadingPartitions.nonEmpty }
 
+  // 如果该group是自己负责，并且该group不存在，那么就返回true，这里的不存在，是指内存维护的group map中没有该group，或该group的状态为dead
   // return true iff group is owned and the group doesn't exist
   def groupNotExists(groupId: String) = inLock(partitionLock) {
     isGroupLocal(groupId) && getGroup(groupId).forall { group =>
