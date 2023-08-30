@@ -80,8 +80,11 @@ class GroupCoordinator(val brokerId: Int,
    * Startup logic executed at the same time when the server starts up.
    */
   def startup(enableMetadataExpiration: Boolean = true) {
+    // 启动coordinator
     info("Starting up.")
+    // 启动manager后台任务
     groupManager.startup(enableMetadataExpiration)
+    //标记是活跃的
     isActive.set(true)
     info("Startup complete.")
   }
@@ -502,6 +505,7 @@ class GroupCoordinator(val brokerId: Int,
                   case Empty =>
                     // 只有是Empty状态才能进行删除操作
                     group.transitionTo(Dead)
+                    // 将该group加入到待删除的group中
                     groupsEligibleForDeletion :+= group
                   case _ =>
                     // 如果不是Empty状态,就不能删除
@@ -512,13 +516,18 @@ class GroupCoordinator(val brokerId: Int,
       }
     }
 
+    // 如果存在要删除的组，那么就实际进行删除处理
     if (groupsEligibleForDeletion.nonEmpty) {
+      // 实际对这些gorup进行清理
       val offsetsRemoved = groupManager.cleanupGroupMetadata(groupsEligibleForDeletion, _.removeAllOffsets())
+
+      // 将对应的错误码加入到groupErrors中
       groupErrors ++= groupsEligibleForDeletion.map(_.groupId -> Errors.NONE).toMap
       info(s"The following groups were deleted: ${groupsEligibleForDeletion.map(_.groupId).mkString(", ")}. " +
         s"A total of $offsetsRemoved offsets were removed.")
     }
 
+    // 返回对应的gorup错误码
     groupErrors
   }
 
@@ -715,6 +724,7 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  // 清理要删除的分区时，也会调用cleanupGroupMetadata，一旦一个group的offset都被清理完了，并且还处于empty状态，那么就会先切到dead状态，然后彻底删除该group
   def handleDeletedPartitions(topicPartitions: Seq[TopicPartition]) {
     val offsetsRemoved = groupManager.cleanupGroupMetadata(groupManager.currentGroups, group => {
       group.removeOffsets(topicPartitions)
@@ -795,6 +805,7 @@ class GroupCoordinator(val brokerId: Int,
     groupManager.scheduleLoadGroupAndOffsets(offsetTopicPartitionId, onGroupLoaded)
   }
 
+  // 处理group迁移，leader发生切换后，该group不再由当前节点负责了
   def handleGroupEmigration(offsetTopicPartitionId: Int) {
     groupManager.removeGroupsForPartition(offsetTopicPartitionId, onGroupUnloaded)
   }

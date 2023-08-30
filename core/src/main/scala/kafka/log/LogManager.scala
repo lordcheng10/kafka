@@ -391,6 +391,7 @@ class LogManager(logDirs: Seq[File],
     /* Schedule the cleanup task to delete old logs */
     if (scheduler != null) {
       info("Starting log cleanup with a period of %d ms.".format(retentionCheckMs))
+      // 实际的数据清理
       scheduler.schedule("kafka-log-retention",
                          cleanupLogs _,
                          delay = InitialTaskDelayMs,
@@ -900,6 +901,7 @@ class LogManager(logDirs: Seq[File],
         // prevent cleaner from working on same partitions when changing cleanup policy
         cleaner.pauseCleaningForNonCompactedPartitions()
       } else {
+        // 将不是compact的进行清理
         currentLogs.filter {
           case (_, log) => !log.config.compact
         }

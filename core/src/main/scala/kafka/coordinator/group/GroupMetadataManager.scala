@@ -75,6 +75,7 @@ class GroupMetadataManager(brokerId: Int,
   /* number of partitions for the consumer metadata topic */
   private val groupMetadataTopicPartitionCount = getGroupMetadataTopicPartitionCount
 
+  // 单线程调度程序处理偏移/组元数据缓存加载和卸载
   /* single-thread scheduler to handle offset/group metadata cache loading and unloading */
   private val scheduler = new KafkaScheduler(threads = 1, threadNamePrefix = "group-metadata-manager-")
 
@@ -139,6 +140,8 @@ class GroupMetadataManager(brokerId: Int,
 
   def startup(enableMetadataExpiration: Boolean) {
     scheduler.startup()
+    // 启动过期清理任务
+    // offsetsRetentionCheckIntervalMs是offset的清理检查周期
     if (enableMetadataExpiration) {
       scheduler.schedule(name = "delete-expired-group-metadata",
         fun = () => cleanupGroupMetadata,
@@ -743,12 +746,26 @@ class GroupMetadataManager(brokerId: Int,
   // visible for testing
   private[group] def cleanupGroupMetadata(): Unit = {
     val currentTimestamp = time.milliseconds()
+    // 清理过期offset, offsetsRetentionMs是offset的保留时间
     val numOffsetsRemoved = cleanupGroupMetadata(groupMetadataCache.values, group => {
       group.removeExpiredOffsets(currentTimestamp, config.offsetsRetentionMs)
     })
     info(s"Removed $numOffsetsRemoved expired offsets in ${time.milliseconds() - currentTimestamp} milliseconds.")
   }
 
+
+  /**
+   * 1.先从内存删除对应group的offset和该group记录;
+   * 2.然后在往磁盘写一个结束标志的record数据，这样就算将该group彻底删除了.
+   *
+   * 有三种情况会调用该方法：
+   * ①处理删除group请求时；
+   * ②offset过期清理；
+   * ③在处理update metadata请求时，清理删除的分区对应的消费offset；
+   * */
+  // 该函数用于清理给定组的组偏移量，也是执行偏移量删除的函数。
+  //  @param groups 要清理其元数据的组
+  //  @param 选择器 实现删除（全部或部分）组偏移量的函数。 该函数在持有组锁时调用，因此调用者无需同时获取组锁。 @return 累计移除的偏移量
   /**
     * This function is used to clean up group offsets given the groups and also a function that performs the offset deletion.
     * @param groups Groups whose metadata are to be cleaned up
@@ -759,34 +776,50 @@ class GroupMetadataManager(brokerId: Int,
   def cleanupGroupMetadata(groups: Iterable[GroupMetadata], selector: GroupMetadata => Map[TopicPartition, OffsetAndMetadata]): Int = {
     var offsetsRemoved = 0
 
+    // 遍历要删除的组
     groups.foreach { group =>
+      // 获取group的id
       val groupId = group.groupId
+      // 加锁
       val (removedOffsets, groupIsDead, generation) = group.inLock {
+        // 删除该group metadata中该gorup记录在内存中的所有offset信息
         val removedOffsets = selector(group)
+        // 如果此时group是empty状态，并且内存中的offset信息都被清理完了，那么就把该group状态切到Dead状态
+        // 对于删除group请求，外围是进行了Empty判断的
         if (group.is(Empty) && !group.hasOffsets) {
           info(s"Group $groupId transitioned to Dead in generation ${group.generationId}")
           group.transitionTo(Dead)
         }
+        // 返回从内存中移除的offset、group是否是dead和generationId
         (removedOffsets, group.is(Dead), group.generationId)
       }
 
+    // 获取该group对应的分区号
     val offsetsPartition = partitionFor(groupId)
+    //构建对应的分区
     val appendPartition = new TopicPartition(Topic.GROUP_METADATA_TOPIC_NAME, offsetsPartition)
     getMagic(offsetsPartition) match {
-      case Some(magicValue) =>
+      case Some(magicValue) =>//对应的是recordVersion，表示消息格式
+        // 构建一个删除标志的record，然后append到对应的分区文件中
         // We always use CREATE_TIME, like the producer. The conversion to LOG_APPEND_TIME (if necessary) happens automatically.
         val timestampType = TimestampType.CREATE_TIME
         val timestamp = time.milliseconds()
 
           replicaManager.nonOfflinePartition(appendPartition).foreach { partition =>
+            // 首先构建一个buffer list，用来存放结束标志
             val tombstones = ListBuffer.empty[SimpleRecord]
             removedOffsets.foreach { case (topicPartition, offsetAndMetadata) =>
               trace(s"Removing expired/deleted offset and metadata for $groupId, $topicPartition: $offsetAndMetadata")
+
               val commitKey = GroupMetadataManager.offsetCommitKey(groupId, topicPartition)
               tombstones += new SimpleRecord(timestamp, commitKey, null)
             }
             trace(s"Marked ${removedOffsets.size} offsets in $appendPartition for deletion.")
 
+
+            // 如果一个group的offset没有全部清理完，那么上面就不会切为dead状态，从而groupIsDead就会为false，
+            // 从而就不会从内存中移除该group，也不会往磁盘中，写一个清除标记，相当于只是清理了内存中的offset信息
+            // 从内存中移除该group，并且构建一个结束标志的record
             // We avoid writing the tombstone when the generationId is 0, since this group is only using
             // Kafka for offset storage.
             if (groupIsDead && groupMetadataCache.remove(groupId, group) && generation > 0) {
@@ -800,6 +833,7 @@ class GroupMetadataManager(brokerId: Int,
 
             if (tombstones.nonEmpty) {
               try {
+                // 将数据写入磁盘
                 // do not need to require acks since even if the tombstone is lost,
                 // it will be appended again in the next purge cycle
                 val records = MemoryRecords.withRecords(magicValue, 0L, compressionType, timestampType, tombstones.toArray: _*)

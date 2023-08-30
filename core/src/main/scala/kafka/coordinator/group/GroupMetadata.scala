@@ -514,13 +514,17 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
 
   def removeAllOffsets(): immutable.Map[TopicPartition, OffsetAndMetadata] = removeOffsets(offsets.keySet.toSeq)
 
+  // 从内存中移除对应分区的offset
   def removeOffsets(topicPartitions: Seq[TopicPartition]): immutable.Map[TopicPartition, OffsetAndMetadata] = {
+    // 遍历要清理的分区，从内存中移除对应的offset记录，其中pendingOffsetCommits是在commit的时候将offset放入，并且在持久化成功后，再从中移除
+    // 对应的pendingTransactionalOffsetCommits也是一样的，最后从offsets中移除对应的分区offset
     topicPartitions.flatMap { topicPartition =>
       pendingOffsetCommits.remove(topicPartition)
       pendingTransactionalOffsetCommits.foreach { case (_, pendingOffsets) =>
         pendingOffsets.remove(topicPartition)
       }
       val removedOffset = offsets.remove(topicPartition)
+      //将移除的分区和offset组成一个map，返回
       removedOffset.map(topicPartition -> _.offsetAndMetadata)
     }.toMap
   }
@@ -531,6 +535,8 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
       offsets.filter {
         case (topicPartition, commitRecordMetadataAndOffset) =>
           !pendingOffsetCommits.contains(topicPartition) && {
+            // 如果该分区没有挂起的offset，并且距离上一次状态变换或提交offset时间，
+            // 已经超过了retention时间或提交offset时，用户指定的过期时间，那么就会将该分区过滤出来
             commitRecordMetadataAndOffset.offsetAndMetadata.expireTimestamp match {
               case None =>
                 // current version with no per partition retention
@@ -546,17 +552,25 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
       }.toMap
     }
 
-    val expiredOffsets: Map[TopicPartition, OffsetAndMetadata] = protocolType match {
+    // 实际是找到过期的分区
+    val expiredOffsets: Map[TopicPartition, OffsetAndMetadata] = protocolType match {// 看协议类型
+      // 如果存在协议类型，那么检查该group是否处于Empty状态
       case Some(_) if is(Empty) =>
+        // 组中不存在消费者 =>
+        //  - 如果当前状态时间戳存在并且自组变为空以来保留期已过，则使所有偏移量过期，并且没有待处理的偏移量提交；
+        //  - 如果没有当前状态时间戳（旧组元数据模式）并且自上次提交时间戳以来已过了保留期，则使偏移量过期
         // no consumer exists in the group =>
         // - if current state timestamp exists and retention period has passed since group became Empty,
         //   expire all offsets with no pending offset commit;
         // - if there is no current state timestamp (old group metadata schema) and retention period has passed
         //   since the last commit timestamp, expire the offset
         getExpiredOffsets(commitRecordMetadataAndOffset =>
+          // 过期时间如果有状态变更时间，就用状态变更时间，否则就用commit offset时间;
+          // 当状态变为empty后，肯定不会再commit offset了
           currentStateTimestamp.getOrElse(commitRecordMetadataAndOffset.offsetAndMetadata.commitTimestamp))
 
       case None =>
+        // protocolType 是 None => 独立（简单）消费者，使用 Kafka 进行偏移量存储，仅使偏移量过期，没有待处理的偏移量提交，自上次提交以来保留期已经过去;
         // protocolType is None => standalone (simple) consumer, that uses Kafka for offset storage only
         // expire offsets with no pending offset commit that retention period has passed since their last commit
         getExpiredOffsets(_.offsetAndMetadata.commitTimestamp)
