@@ -492,8 +492,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      * @return true iff the operation completed within the timeout
      */
     public boolean refreshCommittedOffsetsIfNeeded(Timer timer) {
+        // 将没有fetch位置的分区过滤过来
         final Set<TopicPartition> missingFetchPositions = subscriptions.missingFetchPositions();
 
+        // 发送fetch offset请求
         final Map<TopicPartition, OffsetAndMetadata> offsets = fetchCommittedOffsets(missingFetchPositions, timer);
         if (offsets == null) return false;
 
@@ -515,29 +517,37 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
      */
     public Map<TopicPartition, OffsetAndMetadata> fetchCommittedOffsets(final Set<TopicPartition> partitions,
                                                                         final Timer timer) {
+        // partitions如果是空，那么就返回空
         if (partitions.isEmpty()) return Collections.emptyMap();
 
+        // 获取当前的generation
         final Generation generation = generationIfStable();
+        // 看看当前的分区是否存在挂起的offset fetch请求
         if (pendingCommittedOffsetRequest != null && !pendingCommittedOffsetRequest.sameRequest(partitions, generation)) {
             // if we were waiting for a different request, then just clear it.
             pendingCommittedOffsetRequest = null;
         }
 
         do {
+            // 确认coordinator是否ready，如果没有ready，那么就返回null
             if (!ensureCoordinatorReady(timer)) return null;
 
+            // 联系协调员获取提交的偏移量
             // contact coordinator to fetch committed offsets
             final RequestFuture<Map<TopicPartition, OffsetAndMetadata>> future;
-            if (pendingCommittedOffsetRequest != null) {
+            if (pendingCommittedOffsetRequest != null) {//如果存在挂起的offset fetch请求，那么就先等pendingCommittedOffsetRequest的response
                 future = pendingCommittedOffsetRequest.response;
             } else {
+                // 发送offset fetch
                 future = sendOffsetFetchRequest(partitions);
+                // 挂起一个offset fetch
                 pendingCommittedOffsetRequest = new PendingCommittedOffsetRequest(partitions, generation, future);
 
             }
+            // 实际发送请求，直到等到response或超市
             client.poll(future, timer);
 
-            if (future.isDone()) {
+            if (future.isDone()) {//如果完成了，那么就看是否成功
                 pendingCommittedOffsetRequest = null;
 
                 if (future.succeeded()) {
@@ -548,6 +558,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     timer.sleep(retryBackoffMs);
                 }
             } else {
+                // 如果没有完成，就返回null
                 return null;
             }
         } while (timer.notExpired());

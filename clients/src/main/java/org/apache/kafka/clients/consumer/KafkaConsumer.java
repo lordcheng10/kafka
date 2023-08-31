@@ -2213,6 +2213,8 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
         if (cachedSubscriptionHashAllFetchPositions) return true;
 
+        // 如果有任何分区没有有效位置并且不等待重置，那么我们需要获取已提交的偏移量。
+        // 如果存在缺少位置的分区，我们只会进行协调器查找，因此手动分配分区的消费者可以通过始终确保分配的分区具有初始位置来避免协调器依赖性。
         // If there are any partitions which do not have a valid position and are not
         // awaiting reset, then we need to fetch committed offsets. We will only do a
         // coordinator lookup if there are partitions which have missing positions, so

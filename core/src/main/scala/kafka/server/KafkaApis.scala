@@ -1349,6 +1349,15 @@ class KafkaApis(val requestChannel: RequestChannel,
       val protocols = joinGroupRequest.groupProtocols().asScala.map(protocol =>
         (protocol.name, Utils.toArray(protocol.metadata))).toList
 
+      /**
+       * rebalanceTimeout: 对应客户端配置是max.poll.interval.ms，如果是v0版本用的是session timeout的值来赋值；该配置是控制join delay时间的，
+       * 如果是第一次加入，还会结合服务端的group.initial.rebalance.delay.ms配置来进行多次等待，如果在group.initial.rebalance.delay.ms时间内，
+       * 没有新memeber加入，那么就算完成本轮join；
+       *
+       * sessionTimeout：对应的是客户端session.timeout.ms配置，该配置是用来控制心跳超时时间的；
+       *
+       *  总的来说，join group涉及三个配置：max.poll.interval.ms、session.timeout.ms、group.initial.rebalance.delay.ms，其中前两个是客户端配置，后一个是服务端配置;
+       * */
       // 处理join group请求
       groupCoordinator.handleJoinGroup(
         joinGroupRequest.groupId,// join groupId
