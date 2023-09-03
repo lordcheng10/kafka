@@ -515,6 +515,8 @@ public class SubscriptionState {
             this.paused = false;
         }
 
+        // 判断是否可fetch，看是否暂停，并且还有position不为null
+        // 用户可以调佣接口来是否暂停
         private boolean isFetchable() {
             return !paused && hasValidPosition();
         }

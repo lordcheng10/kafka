@@ -812,6 +812,9 @@ class GroupMetadataManager(brokerId: Int,
               trace(s"Removing expired/deleted offset and metadata for $groupId, $topicPartition: $offsetAndMetadata")
 
               val commitKey = GroupMetadataManager.offsetCommitKey(groupId, topicPartition)
+              //group写入到磁盘的元数据包括offset数据和group 成员信息等数据，所以我们需要两个清理标记，分别来标记是否要清理哪个数据
+              // 对于simple consumer来说，它只是用kafka来存offset，不会有group成员等信息，所以只需要写入一个offset清理标记即可，
+              // 并且它的过期判断也是根据offset提交时间来的，因为它不存在join group等操作，状态会一直是empty(在commit offset的时候，创建的group，初始状态就是empty)，不会流转；
               tombstones += new SimpleRecord(timestamp, commitKey, null)
             }
             trace(s"Marked ${removedOffsets.size} offsets in $appendPartition for deletion.")
@@ -820,6 +823,9 @@ class GroupMetadataManager(brokerId: Int,
             // 如果一个group的offset没有全部清理完，那么上面就不会切为dead状态，从而groupIsDead就会为false，
             // 从而就不会从内存中移除该group，也不会往磁盘中，写一个清除标记，相当于只是清理了内存中的offset信息
             // 从内存中移除该group，并且构建一个结束标志的record
+
+            // generation大于0，就说明一次都没有join过，说明就是simple consumer，它没有group metadata信息，因此就不需要写入group metadata清理标记
+            // 我们避免在 GenerationId 为 0 时写入逻辑删除，因为该组仅使用 Kafka 进行偏移存储。
             // We avoid writing the tombstone when the generationId is 0, since this group is only using
             // Kafka for offset storage.
             if (groupIsDead && groupMetadataCache.remove(groupId, group) && generation > 0) {

@@ -1185,7 +1185,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 throw new IllegalStateException("Consumer is not subscribed to any topics or assigned any partitions");
             }
 
-            // 拉取数据，知道超时时间达到
+            // 拉取数据，直到超时时间达到
             // poll for new data until the timeout expires
             do {
                 // 往外抛异常，让用户不用一直阻塞，从而唤醒用户
@@ -1243,21 +1243,26 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     }
 
     private Map<TopicPartition, List<ConsumerRecord<K, V>>> pollForFetches(Timer timer) {
+        // 获取poll timeout的超时时间
         long pollTimeout = coordinator == null ? timer.remainingMs() :
                 Math.min(coordinator.timeToNextPoll(timer.currentTimeMs()), timer.remainingMs());
 
+        // 如果数据获取到了，立即返回
         // if data is available already, return it immediately
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
+        // 发送fetch请求，不会重发pending的fetch
         // send any new fetches (won't resend pending fetches)
         fetcher.sendFetches();
 
+        // 如果我们丢失了一些位置，我们不希望在轮询中陷入阻塞，因为偏移量查找可能会在失败后后退
         // We do not want to be stuck blocking in poll if we are missing some positions
         // since the offset lookup may be backing off after a failure
 
+        // 注意：使用cachedSubscriptionHashAllFetchPositions意味着我们必须在此方法之前调用updateAssignmentMetadataIfNeeded。
         // NOTE: the use of cachedSubscriptionHashAllFetchPositions means we MUST call
         // updateAssignmentMetadataIfNeeded before this method.
         if (!cachedSubscriptionHashAllFetchPositions && pollTimeout > retryBackoffMs) {
@@ -1266,12 +1271,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         Timer pollTimer = time.timer(pollTimeout);
         client.poll(pollTimer, () -> {
+            // 由于获取可能由后台线程完成，因此我们需要此轮询条件来确保我们不会在 poll() 中不必要地阻塞
             // since a fetch might be completed by the background thread, we need this poll condition
             // to ensure that we do not block unnecessarily in poll()
             return !fetcher.hasCompletedFetches();
         });
         timer.update(pollTimer.currentTimeMs());
 
+        // 在长轮询之后，我们应该在返回数据之前检查该组是否需要重新平衡，以便该组可以更快地稳定下来
         // after the long poll, we should check whether the group needs to rebalance
         // prior to returning data so that the group can stabilize faster
         if (coordinator != null && coordinator.rejoinNeededOrPending()) {

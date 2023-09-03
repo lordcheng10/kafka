@@ -468,8 +468,11 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
     }
 
     /**
+     * 返回获取的记录，清空记录缓冲区并更新消耗的位置。
+     *
      * Return the fetched records, empty the record buffer and update the consumed position.
      *
+     * // 注意：返回空记录可保证消耗的位置不会更新。
      * NOTE: returning empty records guarantees the consumed position are NOT updated.
      *
      * @return The fetched records per partition
@@ -479,17 +482,24 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
      */
     public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
         Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>();
+        //maxPollRecords默认是500条，对应max.poll.records配置
         int recordsRemaining = maxPollRecords;
 
         try {
             while (recordsRemaining > 0) {
+                // 如果nextInLineRecords为null，那么需要重新解析出新的nextInLineRecords
                 if (nextInLineRecords == null || nextInLineRecords.isFetched) {
+                    // 获取完成的fetch请求数据
                     CompletedFetch completedFetch = completedFetches.peek();
-                    if (completedFetch == null) break;
+                    if (completedFetch == null) break;//如果没有就直接退出循环，这样就给用户返回空，用户就没有poll到数据
 
                     try {
+                        // 从完成的fetch请求数据中解析出下一个record
                         nextInLineRecords = parseCompletedFetch(completedFetch);
                     } catch (Exception e) {
+                        // 如果 (1) 它不包含任何记录，并且 (2) 不存在包含此异常之前的实际内容的已提取记录，则在解析时删除已完成的异常，但会出现异常。
+                        // 第一个条件确保在诸如 TopicAuthorizationException 之类的情况下，
+                        // completedFetches 不会与相同的completedFetch 发生冲突，第二个条件确保不会因后续记录中的异常而导致潜在的数据丢失。
                         // Remove a completedFetch upon a parse with exception if (1) it contains no records, and
                         // (2) there are no fetched records with actual content preceding this exception.
                         // The first condition ensures that the completedFetches is not stuck with the same completedFetch
@@ -497,12 +507,16 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
                         // potential data loss due to an exception in a following record.
                         FetchResponse.PartitionData partition = completedFetch.partitionData;
                         if (fetched.isEmpty() && (partition.records == null || partition.records.sizeInBytes() == 0)) {
+                            // 如果这个fetch请求中没有数据，那么将该请求poll出来丢掉
                             completedFetches.poll();
                         }
+                        // 然后再对外抛异常
                         throw e;
                     }
+                    // 最后该请求需要poll出来丢掉
                     completedFetches.poll();
                 } else {
+                    // 如果已经有nextInLineRecords了，那么就直接从nextInLineRecords中解析出数据
                     List<ConsumerRecord<K, V>> records = fetchRecords(nextInLineRecords, recordsRemaining);
                     TopicPartition partition = nextInLineRecords.partition;
                     if (!records.isEmpty()) {
@@ -530,36 +544,47 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
     }
 
     private List<ConsumerRecord<K, V>> fetchRecords(PartitionRecords partitionRecords, int maxRecords) {
-        if (!subscriptions.isAssigned(partitionRecords.partition)) {
+        if (!subscriptions.isAssigned(partitionRecords.partition)) {// 检查是否是自己负责该分区
+            // 当获取的记录返回到消费者的轮询调用之前发生重新平衡时，可能会发生这种情况
             // this can happen when a rebalance happened before fetched records are returned to the consumer's poll call
             log.debug("Not returning fetched records for partition {} since it is no longer assigned",
                     partitionRecords.partition);
-        } else if (!subscriptions.isFetchable(partitionRecords.partition)) {
+        } else if (!subscriptions.isFetchable(partitionRecords.partition)) {//检查该分区是否是可以fetch的
+            // 当获取的记录返回到消费者的轮询调用之前暂停分区或者重置偏移量时，可能会发生这种情况
             // this can happen when a partition is paused before fetched records are returned to the consumer's
             // poll call or if the offset is being reset
             log.debug("Not returning fetched records for assigned partition {} since it is no longer fetchable",
                     partitionRecords.partition);
         } else {
+            // 获取该分区的fetch position
             long position = subscriptions.position(partitionRecords.partition);
-            if (partitionRecords.nextFetchOffset == position) {
+            if (partitionRecords.nextFetchOffset == position) {//如果fetch到的数据的fetch offset不等于当前的读位置，那么就丢弃
+
+                // partitionRecords就是已经完成的fetch请求，包含服务端返回来的数据，已经之前对应fetch请求的fetch offset
                 List<ConsumerRecord<K, V>> partRecords = partitionRecords.fetchRecords(maxRecords);
 
+                // nextFetchOffset是指向收到所有数据的下一条消息
                 long nextOffset = partitionRecords.nextFetchOffset;
                 log.trace("Returning fetched records at offset {} for assigned partition {} and update " +
                         "position to {}", position, partitionRecords.partition, nextOffset);
+                // 将该offset作为下一次fetch的offset
                 subscriptions.position(partitionRecords.partition, nextOffset);
 
+                // 计算分区lag
                 Long partitionLag = subscriptions.partitionLag(partitionRecords.partition, isolationLevel);
                 if (partitionLag != null)
                     this.sensors.recordPartitionLag(partitionRecords.partition, partitionLag);
 
+                // 计算距离start offset有多远距离
                 Long lead = subscriptions.partitionLead(partitionRecords.partition);
                 if (lead != null) {
                     this.sensors.recordPartitionLead(partitionRecords.partition, lead);
                 }
 
+                // 返回fetch到的records
                 return partRecords;
-            } else {
+            } else {//如果不等于的话
+                // 根据上次使用的位置，这些记录不是下一个记录，请忽略它们，它们必须来自过时的请求
                 // these records aren't next in line based on the last consumed position, ignore them
                 // they must be from an obsolete request
                 log.debug("Ignoring fetched records for {} at offset {} since the current position is {}",
@@ -567,7 +592,9 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
             }
         }
 
+        // 将这些records丢弃掉
         partitionRecords.drain();
+        // 然后返回空的records
         return emptyList();
     }
 
@@ -1169,10 +1196,14 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
 
         private Record nextFetchedRecord() {
             while (true) {
+                // 如果records为null或没有下一条消息
                 if (records == null || !records.hasNext()) {
+                    // 关闭record 流,其实就是关闭迭代器
                     maybeCloseRecordStream();
 
-                    if (!batches.hasNext()) {
+                    if (!batches.hasNext()) {//如果没有下一个batch
+                        // 即使通过压缩删除了最后一条记录，消息格式 v2 也会保留批次中的最后一个偏移量。 通过使用从批次中的最后一个偏移量计算出的下一个偏移量，
+                        // 我们确保下一次获取的偏移量将指向下一个批次，这避免了不必要的同一批次的重新获取（在最坏的情况下，消费者可能会得到 卡住了重复获取同一批次）。
                         // Message format v2 preserves the last offset in a batch even if the last record is removed
                         // through compaction. By using the next offset computed from the last offset in the batch,
                         // we ensure that the offset of the next fetch will point to the next batch, which avoids
@@ -1180,19 +1211,25 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
                         // fetching the same batch repeatedly).
                         if (currentBatch != null)
                             nextFetchOffset = currentBatch.nextOffset();
+                        // 当没有下一个batch后，就关闭迭代器流，设置为可以fetch状态，然后返回
                         drain();
                         return null;
                     }
 
+                    // 如果有下一个batch，那么直接获取下一个batch
                     currentBatch = batches.next();
+                    // 校验该batch是否是有效的
                     maybeEnsureValid(currentBatch);
 
+                    // 如果隔离等级是读取提交的，并且该batch还有producer id
                     if (isolationLevel == IsolationLevel.READ_COMMITTED && currentBatch.hasProducerId()) {
+                        // 从中止事务队列中删除在当前批次的最后一个偏移量之前开始的所有中止事务，并将关联的 ProducerId 添加到中止生产者集中
                         // remove from the aborted transaction queue all aborted transactions which have begun
                         // before the current batch's last offset and add the associated producerIds to the
                         // aborted producer set
                         consumeAbortedTransactionsUpTo(currentBatch.lastOffset());
 
+                        // 获取producer id
                         long producerId = currentBatch.producerId();
                         if (containsAbortMarker(currentBatch)) {
                             abortedProducerIds.remove(producerId);
@@ -1205,18 +1242,24 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
                         }
                     }
 
+                    // 序列化解压出records迭代器
                     records = currentBatch.streamingIterator(decompressionBufferSupplier);
                 } else {
+                    // 获取第一条消息
                     Record record = records.next();
+                    // 将小于之前fetch位置的消息跳过
                     // skip any records out of range
                     if (record.offset() >= nextFetchOffset) {
+                        // 我们仅在不应跳过消息时才进行验证。
                         // we only do validation when the message should not be skipped.
                         maybeEnsureValid(record);
 
+                        // 控制记录不会返回给用户
                         // control records are not returned to the user
                         if (!currentBatch.isControlBatch()) {
                             return record;
                         } else {
+                            // 当我们跳过控制批次时，增加下一个获取偏移量。
                             // Increment the next fetch offset when we skip a control batch.
                             nextFetchOffset = record.offset() + 1;
                         }
@@ -1226,6 +1269,7 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
         }
 
         private List<ConsumerRecord<K, V>> fetchRecords(int maxRecords) {
+            // 反序列化前获取下一条记录时出错。
             // Error when fetching the next record before deserialization.
             if (corruptLastRecord)
                 throw new KafkaException("Received exception when fetching the next record from " + partition
@@ -1238,19 +1282,28 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
             List<ConsumerRecord<K, V>> records = new ArrayList<>();
             try {
                 for (int i = 0; i < maxRecords; i++) {
+                    // 仅当上次获取没有异常时才移至下一条记录。 否则我们应该使用最后一条记录再次进行反序列化。
                     // Only move to next record if there was no exception in the last fetch. Otherwise we should
                     // use the last record to do deserialization again.
                     if (cachedRecordException == null) {
+                        // 先将corruptLastRecord设置为true，用来防止在执行到这里的时候，外围再次调用fetchRecords
                         corruptLastRecord = true;
+                        //获取下一条record
                         lastRecord = nextFetchedRecord();
+                        // 执行完了，设置回false
                         corruptLastRecord = false;
                     }
+                    // 如果获取到的record为null，那就直接break
                     if (lastRecord == null)
                         break;
+                    // 将解析出来的消息放入records中
                     records.add(parseRecord(partition, currentBatch, lastRecord));
                     recordsRead++;
+                    // 记录读取的bytes
                     bytesRead += lastRecord.sizeInBytes();
+                    // 移动fetch的offset
                     nextFetchOffset = lastRecord.offset() + 1;
+                    // 在某些情况下，反序列化可能会抛出异常，并且重试可能会成功，在这种情况下我们允许用户继续前进。
                     // In some cases, the deserialization may have thrown an exception and the retry may succeed,
                     // we allow user to move forward in this case.
                     cachedRecordException = null;
@@ -1266,6 +1319,7 @@ public class Fetcher<K, V> implements SubscriptionState.Listener, Closeable {
                                                  + ". If needed, please seek past the record to "
                                                  + "continue consumption.", e);
             }
+            // 将解析出来的record返回
             return records;
         }
 
