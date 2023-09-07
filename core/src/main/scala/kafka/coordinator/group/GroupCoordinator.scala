@@ -859,6 +859,12 @@ class GroupCoordinator(val brokerId: Int,
     // 成员key
     val memberKey = MemberKey(member.groupId, member.memberId)
 
+    /**
+     * Q1: 为啥这里要将heartbeatSatisfied设置为true，然后执行完checkAndComplete后，又设置为false?
+     * A1: 设置为true，是为了在执行checkAndComplete的时候，能走到强制完成方法forceComplete,
+     * 只有在接收到下一次心跳的时候，才可以设置该变量，其他情况也可能走到forceComplete，
+     * 比如挂起的member，在执行checkAndComplete时，发现已经加入到group中了，或该group处于dead状态了
+     * */
     // 完成当前心跳预期
     // complete current heartbeat expectation
     member.heartbeatSatisfied = true
@@ -927,6 +933,10 @@ class GroupCoordinator(val brokerId: Int,
     // 将该member放入到该group中，同时记录上对应的callback，这个callback就是该member完成后回复response的
     group.add(member, callback)
 
+    /**
+     * Q1: 为啥每次创建一个delay join的时候，都需要先创建一个心跳？
+     * A1: 这里和delay join没关系。心跳和member绑定的，每加入一个member就必须启动一个心跳，否则无法感知到心跳超时，就没办法从group中移除该member。
+     * */
     // 会话超时不会影响新成员，因为他们没有memberId，也无法发送检测信号。
     // 此外，我们无法检测到断开连接，因为当JoinGroup处于炼狱中时，套接字被静音。
     // 如果客户端确实断开了连接（例如，由于长时间重新平衡期间的请求超时），他们可能会简单地重试，这将导致重新平衡中有许多不起作用的成员
@@ -959,6 +969,8 @@ class GroupCoordinator(val brokerId: Int,
   // 尝试重新rebalance
   private def maybePrepareRebalance(group: GroupMetadata, reason: String) {
     group.inLock {
+      // 这里的判断，可以防止同一个groupId，创建多个delay join opearation
+      // 每个成员同一时刻只会有一个delay heart beat opearation，每个group也只会有一个delay join opearation
       if (group.canRebalance) {// 首先检查是否可以rebalance:就是检查当前状态的前一个状态是否合理
         // 可以的话就准备rebalance
         prepareRebalance(group, reason)

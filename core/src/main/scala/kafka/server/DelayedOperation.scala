@@ -140,6 +140,13 @@ abstract class DelayedOperation(override val delayMs: Long,
         // `tryCompletePending`. In this case we should retry.
         retry = tryCompletePending.get()
       } else {
+        /**
+         * Q1: 这里引入retry的目的是干啥?
+         * A1:
+         * */
+
+        // 另一个线程正在持有锁。 如果已经设置了“tryCompletePending”并且该线程无法获取锁，则持有锁的线程一定会看到该标志并重试。
+        // 否则，我们应该设置该标志并在此线程上重试，因为持有锁的线程可能已释放锁并在设置标志时返回。
         // Another thread is holding the lock. If `tryCompletePending` is already set and this thread failed to
         // acquire the lock, then the thread that is holding the lock is guaranteed to see the flag and retry.
         // Otherwise, we should set the flag and retry on this thread since the thread holding the lock may have
@@ -202,6 +209,12 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
     }
   }
 
+  /**
+   * Q2: 为啥需要一个watcherLists，不能直接用时间轮吗？
+   * A2：时间轮的数据结构是数组加链表，每个bucket保存的是个链表，
+   * 我们需要能根据一个key找到对应的opearation，如果遍历链表效率还会很低，所以需要一个外部结构来快速检索.
+   * watcherLists是一个map数组，map中的value值是一个队列，我们可以根据key的hash值可以快速找到对应的map，然后从中取出key对应的opearation队列；
+   * */
   private val watcherLists = Array.fill[WatcherList](DelayedOperationPurgatory.Shards)(new WatcherList)
   private def watcherList(key: Any): WatcherList = {
     watcherLists(Math.abs(key.hashCode() % watcherLists.length))

@@ -1394,7 +1394,6 @@ class ReplicaManager(val config: KafkaConfig,
           partition.getReplica(replicaId) match {
             case Some(replica) =>
               partition.updateReplicaLogReadResult(replica, readResult)
-            case None =>
               warn(s"Leader $localBrokerId failed to record follower $replicaId's position " +
                 s"${readResult.info.fetchOffsetMetadata.messageOffset} since the replica is not recognized to be " +
                 s"one of the assigned replicas ${partition.assignedReplicas.map(_.brokerId).mkString(",")} " +
