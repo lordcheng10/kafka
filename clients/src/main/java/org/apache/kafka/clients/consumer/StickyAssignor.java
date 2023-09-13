@@ -212,9 +212,11 @@ public class StickyAssignor extends AbstractPartitionAssignor {
         // 分区到consumer的映射，记录一个分区可以分配到的consumer（该consumer订阅到的topic）
         // a mapping of all topic partitions to all consumers that can be assigned to them
         final Map<TopicPartition, List<String>> partition2AllPotentialConsumers = new HashMap<>();
+        // 每个consuer可以分配哪些分区
         // a mapping of all consumers to all potential topic partitions that can be assigned to them
         final Map<String, List<TopicPartition>> consumer2AllPotentialPartitions = new HashMap<>();
 
+        // 根据每个consumer订阅的topic以及该topic的分区数，来填充partition2AllPotentialConsumers和consumer2AllPotentialPartitions
         // initialize partition2AllPotentialConsumers and consumer2AllPotentialPartitions in the following two for loops
         for (Entry<String, Integer> entry: partitionsPerTopic.entrySet()) {
             for (int i = 0; i < entry.getValue(); ++i)
@@ -237,20 +239,25 @@ public class StickyAssignor extends AbstractPartitionAssignor {
                 currentAssignment.put(consumer, new ArrayList<TopicPartition>());
         }
 
+        // 上一次每个分区对应的consumer
         // a mapping of partition to current consumer
         Map<TopicPartition, String> currentPartitionConsumer = new HashMap<>();
         for (Map.Entry<String, List<TopicPartition>> entry: currentAssignment.entrySet())
             for (TopicPartition topicPartition: entry.getValue())
                 currentPartitionConsumer.put(topicPartition, entry.getKey());
 
+        // 按照一定规则对分区进行排序
         List<TopicPartition> sortedPartitions = sortPartitions(
                 currentAssignment, isFreshAssignment, partition2AllPotentialConsumers, consumer2AllPotentialPartitions);
 
+        // 所有需要分配的分区（最初设置为所有分区，但在下面的循环中进行调整）
         // all partitions that need to be assigned (initially set to all partitions but adjusted in the following loop)
         List<TopicPartition> unassignedPartitions = new ArrayList<>(sortedPartitions);
+        // 遍历上一次的分配结果
         for (Iterator<Map.Entry<String, List<TopicPartition>>> it = currentAssignment.entrySet().iterator(); it.hasNext();) {
             Map.Entry<String, List<TopicPartition>> entry = it.next();
-            if (!subscriptions.containsKey(entry.getKey())) {
+            if (!subscriptions.containsKey(entry.getKey())) {//如果上一次consumer中不包含当前遍历的consumer
+                // 如果之前存在的消费者（并且有一些分区分配）现在被删除，则将其从 currentAssignment 中删除
                 // if a consumer that existed before (and had some partition assignments) is now removed, remove it from currentAssignment
                 for (TopicPartition topicPartition: entry.getValue())
                     currentPartitionConsumer.remove(topicPartition);
@@ -418,6 +425,13 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     }
 
     /**
+     * 对有效分区进行排序，以便在潜在的重新分配阶段以正确的顺序处理它们，从而导致消费者之间的分区移动最小化（从而实现最大粘性）
+     * @param currentAssignment 到目前为止计算的分配
+     * @param isFreshAssignment 这是一项新分配，还是现有分配的重新分配, 如果为true，表示上一次的分配记录没有，完全基于当前进行分配
+     * @param partition2AllPotentialConsumers 分区到潜在消费者的映射
+     * @param consumer2AllPotentialPartitions 消费者到他们可以消费的潜在分区的映射
+     * @return 有效分区的排序列表
+     *
      * Sort valid partitions so they are processed in the potential reassignment phase in the proper order
      * that causes minimal partition movement among consumers (hence honoring maximal stickiness)
      *
@@ -431,33 +445,43 @@ public class StickyAssignor extends AbstractPartitionAssignor {
                                                 boolean isFreshAssignment,
                                                 Map<TopicPartition, List<String>> partition2AllPotentialConsumers,
                                                 Map<String, List<TopicPartition>> consumer2AllPotentialPartitions) {
+        // 存放最终排序的分区结果
         List<TopicPartition> sortedPartitions = new ArrayList<>();
 
+        // 如果不是全部重新分配（有上一次的分配记录）并且  如果分区的潜在消费者相同，并且潜在的分区消费者可以从中消费也相同
         if (!isFreshAssignment && areSubscriptionsIdentical(partition2AllPotentialConsumers, consumer2AllPotentialPartitions)) {
+            // 如果这是重新分配并且订阅是相同的（所有消费者都可以从所有主题消费），
+            // 那么我们只需要以循环方式简单地列出分区（从分配最多分区的消费者到分配最少分区的消费者）
             // if this is a reassignment and the subscriptions are identical (all consumers can consumer from all topics)
             // then we just need to simply list partitions in a round robin fashion (from consumers with
             // most assigned partitions to those with least)
-            Map<String, List<TopicPartition>> assignments = deepCopy(currentAssignment);
+            Map<String, List<TopicPartition>> assignments = deepCopy(currentAssignment);// 将上一次的分配方案深度拷贝一份
             for (Entry<String, List<TopicPartition>> entry: assignments.entrySet()) {
-                List<TopicPartition> toRemove = new ArrayList<>();
+                List<TopicPartition> toRemove = new ArrayList<>();// 记录要移除的分区
                 for (TopicPartition partition: entry.getValue())
-                    if (!partition2AllPotentialConsumers.keySet().contains(partition))
+                    if (!partition2AllPotentialConsumers.keySet().contains(partition))//如果该分区不再任何consumer订阅的topic 分区内，那么就加入移除分区的集合中
                         toRemove.add(partition);
-                for (TopicPartition partition: toRemove)
+                for (TopicPartition partition: toRemove)// 将所有分区从assignments中移除
                     entry.getValue().remove(partition);
             }
+            //最终得到的assignments，都是要消费的
+            // SubscriptionComparator会按照分配的分区数来排序，如果分区数相等，那么就按照memeberId字符串比较的顺序来排序
             TreeSet<String> sortedConsumers = new TreeSet<>(new SubscriptionComparator(assignments));
             sortedConsumers.addAll(assignments.keySet());
 
             while (!sortedConsumers.isEmpty()) {
+                // 获取最后一个（也是分配最多分区的consumer）
                 String consumer = sortedConsumers.pollLast();
+                // 获取上一次它分配到的分区列表
                 List<TopicPartition> remainingPartitions = assignments.get(consumer);
                 if (!remainingPartitions.isEmpty()) {
+                    // 从上一次分配分区最多的consumer中移除一个分区加入到sortedPartitions中
                     sortedPartitions.add(remainingPartitions.remove(0));
                     sortedConsumers.add(consumer);
                 }
             }
 
+            // 遍历要消费的分区是否都在sortedPartitions中，否则就将没有的分区放入sortedPartitions中
             for (TopicPartition partition: partition2AllPotentialConsumers.keySet()) {
                 if (!sortedPartitions.contains(partition))
                     sortedPartitions.add(partition);
@@ -476,6 +500,8 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     }
 
     /**
+     * true 如果分区的潜在消费者相同，并且潜在的分区消费者可以从中消费也相同
+     *
      * @param partition2AllPotentialConsumers a mapping of partitions to their potential consumers
      * @param consumer2AllPotentialPartitions a mapping of consumers to potential partitions they can consumer from
      * @return true if potential consumers of partitions are the same, and potential partitions consumers can
@@ -727,6 +753,8 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     }
 
     /**
+     * 如果集合中的所有列表具有相同的成员，则为 true； 否则为假
+     *
      * @param col a collection of elements of type list
      * @return true if all lists in the collection have the same members; false otherwise
      */
