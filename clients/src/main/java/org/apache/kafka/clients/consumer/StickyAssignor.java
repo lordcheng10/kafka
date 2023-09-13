@@ -199,12 +199,17 @@ public class StickyAssignor extends AbstractPartitionAssignor {
 
     public Map<String, List<TopicPartition>> assign(Map<String, Integer> partitionsPerTopic,
                                                     Map<String, Subscription> subscriptions) {
+        // currentAssignment记录每个consumer分配的分区列表，存放最终的分配结果
         Map<String, List<TopicPartition>> currentAssignment = new HashMap<>();
+        // 记录分区移动的
         partitionMovements = new PartitionMovements();
 
+        // 预填充currentAssignment：根据上一次的分配进行预填充
         prepopulateCurrentAssignments(subscriptions, currentAssignment);
+        // 看看是否为空
         boolean isFreshAssignment = currentAssignment.isEmpty();
 
+        // 分区到consumer的映射，记录一个分区可以分配到的consumer（该consumer订阅到的topic）
         // a mapping of all topic partitions to all consumers that can be assigned to them
         final Map<TopicPartition, List<String>> partition2AllPotentialConsumers = new HashMap<>();
         // a mapping of all consumers to all potential topic partitions that can be assigned to them
@@ -286,6 +291,7 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     private void prepopulateCurrentAssignments(Map<String, Subscription> subscriptions,
                                                Map<String, List<TopicPartition>> currentAssignment) {
         for (Map.Entry<String, Subscription> subscriptionEntry : subscriptions.entrySet()) {
+            // 如果userData不为null，就说明存在上一次的分配，那么就先用上一次的分配进行预填充
             ByteBuffer userData = subscriptionEntry.getValue().userData();
             if (userData != null && userData.hasRemaining())
                 currentAssignment.put(subscriptionEntry.getKey(), deserializeTopicPartitionAssignment(userData));
@@ -311,7 +317,15 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     }
 
     /**
+     * 该方法只是对currentAssignment进行了一些检查，并不会做任何修改
+     *
+     * 确定当前分配是否是平衡分配.
      * determine if the current assignment is a balanced one
+     *
+     * @param currentAssignment: 需要检查平衡的分配
+     * @param sortedCurrentSubscriptions: 根据已分配给消费者的主题分区数量升序排序的一组消费者
+     * @param allSubscriptions: 所有消费者到可以分配给他们的所有潜在主题分区的映射
+     * @return 如果给定的分配方案是平衡的，那么就返回true，否则就返回false
      *
      * @param currentAssignment: the assignment whose balance needs to be checked
      * @param sortedCurrentSubscriptions: an ascending sorted set of consumers based on how many topic partitions are already assigned to them
@@ -321,40 +335,53 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     private boolean isBalanced(Map<String, List<TopicPartition>> currentAssignment,
                                TreeSet<String> sortedCurrentSubscriptions,
                                Map<String, List<TopicPartition>> allSubscriptions) {
+        // currentAssignment中，分到最少分区的数量
         int min = currentAssignment.get(sortedCurrentSubscriptions.first()).size();
+        // currentAssignment中，分到最多分区的数量
         int max = currentAssignment.get(sortedCurrentSubscriptions.last()).size();
         if (min >= max - 1)
+            // 如果分配给消费者的最小和最大分区数最多相差 1，则返回 true，说明分配是均衡的
             // if minimum and maximum numbers of partitions assigned to consumers differ by at most one return true
             return true;
 
+        // 创建从分区到分配给它们的使用者的映射
         // create a mapping from partitions to the consumer assigned to them
         final Map<TopicPartition, String> allPartitions = new HashMap<>();
+        // <consumer，负责的分区列表>
         Set<Entry<String, List<TopicPartition>>> assignments = currentAssignment.entrySet();
         for (Map.Entry<String, List<TopicPartition>> entry: assignments) {
+            // 该consumer负责的分区列表
             List<TopicPartition> topicPartitions = entry.getValue();
+            // 遍历每个分区
             for (TopicPartition topicPartition: topicPartitions) {
+                // allPartitions记录了分区到consumer的映射，如果遍历到这里，发现在allPartitions中，说明该分区被重复分配了（一个分区分配给了多个consumer）
                 if (allPartitions.containsKey(topicPartition))
                     log.error("{} is assigned to more than one consumer.", topicPartition);
+                // 将分区和对应consumer映射记录到allPartitions中
                 allPartitions.put(topicPartition, entry.getKey());
             }
         }
 
+        // 对于每个没有获得所有主题分区的消费者，确保它可以获得但没有获得的任何主题分区都不能移动到它（因为这会打破平衡）
         // for each consumer that does not have all the topic partitions it can get make sure none of the topic partitions it
         // could but did not get cannot be moved to it (because that would break the balance)
-        for (String consumer: sortedCurrentSubscriptions) {
+        for (String consumer: sortedCurrentSubscriptions) {//遍历排序的consumer列表(应该是按照分配的分区数，从小到大遍历)
+            // 从currentAssignment中获取consumer对应的分区列表
             List<TopicPartition> consumerPartitions = currentAssignment.get(consumer);
             int consumerPartitionCount = consumerPartitions.size();
 
+            // 如果该消费者已经拥有它可以获得的所有主题分区，则跳过
             // skip if this consumer already has all the topic partitions it can get
             if (consumerPartitionCount == allSubscriptions.get(consumer).size())
                 continue;
 
+            // 否则确保它不能再得到更多
             // otherwise make sure it cannot get any more
             List<TopicPartition> potentialTopicPartitions = allSubscriptions.get(consumer);
-            for (TopicPartition topicPartition: potentialTopicPartitions) {
-                if (!currentAssignment.get(consumer).contains(topicPartition)) {
-                    String otherConsumer = allPartitions.get(topicPartition);
-                    int otherConsumerPartitionCount = currentAssignment.get(otherConsumer).size();
+            for (TopicPartition topicPartition: potentialTopicPartitions) {//遍历所有潜在的分区
+                if (!currentAssignment.get(consumer).contains(topicPartition)) {// 如果该分区不在分配的方案中（新增的分区不关心，但减少的分区需要处理）
+                    String otherConsumer = allPartitions.get(topicPartition);// 看看该分区分给了哪个consumer
+                    int otherConsumerPartitionCount = currentAssignment.get(otherConsumer).size();// 该consumer有多少分区
                     if (consumerPartitionCount < otherConsumerPartitionCount) {
                         log.debug("{} can be moved from consumer {} to consumer {} for a more balanced assignment.",
                                 topicPartition, otherConsumer, consumer);
@@ -765,12 +792,17 @@ public class StickyAssignor extends AbstractPartitionAssignor {
     }
 
     /**
+     * 此类维护一些数据结构以简化消费者之间分区移动的查找。
+     * 在分区重新平衡期间的每个时间点，它都会跟踪与每个主题相对应的分区移动，以及每个分区可能的移动（以ConsumerPair 对象的形式）。
+     *
      * This class maintains some data structures to simplify lookup of partition movements among consumers. At each point of
      * time during a partition rebalance it keeps track of partition movements corresponding to each topic, and also possible
      * movement (in form a <code>ConsumerPair</code> object) for each partition.
      */
     private static class PartitionMovements {
+        //partitionMovementsByTopic记录了某个topic的哪些分区从哪个consumer移动到另外一个consumer上
         private Map<String, Map<ConsumerPair, Set<TopicPartition>>> partitionMovementsByTopic = new HashMap<>();
+        // 记录每个分区从哪个consumer移动到哪个consumer上
         private Map<TopicPartition, ConsumerPair> partitionMovements = new HashMap<>();
 
         private ConsumerPair removeMovementRecordOfPartition(TopicPartition partition) {

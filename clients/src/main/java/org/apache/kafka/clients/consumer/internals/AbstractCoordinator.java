@@ -194,6 +194,10 @@ public abstract class AbstractCoordinator implements Closeable {
     protected abstract void onJoinPrepare(int generation, String memberId);
 
     /**
+     * 执行小组任务。 领导者使用它来将状态推送到组的所有成员（例如，在新消费者的情况下推送分区分配）
+     * @param leaderId 领导者的id（即该成员的id）
+     * @param allMemberMetadata 来自群组所有成员的元数据
+     * @return 每个成员到其州分配的地图
      * Perform assignment for the group. This is used by the leader to push state to all the members
      * of the group (e.g. to push partition assignments in the case of the new consumer)
      * @param leaderId The id of the leader (which is this member)
@@ -613,10 +617,14 @@ public abstract class AbstractCoordinator implements Closeable {
 
     private RequestFuture<ByteBuffer> onJoinLeader(JoinGroupResponse joinResponse) {
         try {
+            // 执行领导者同步并发回该组的分配
+            // 如果是leader的话，就需要计算分配方案
+            // joinResponse.members记录了所有consumer订阅的topic和分配的分区以及对应的分区分配策略（所有consumer发送join请求传递给服务端，服务端收到后，保存起来，最后发送给leader节点，让leader节点参考进行分区分配）
             // perform the leader synchronization and send back the assignment for the group
             Map<String, ByteBuffer> groupAssignment = performAssignment(joinResponse.leaderId(), joinResponse.groupProtocol(),
                     joinResponse.members());
 
+            // 将计算出来的分配方案通过sync group请求发送给服务端
             SyncGroupRequest.Builder requestBuilder =
                     new SyncGroupRequest.Builder(groupId, generation.generationId, generation.memberId, groupAssignment);
             log.debug("Sending leader SyncGroup to coordinator {}: {}", this.coordinator, requestBuilder);

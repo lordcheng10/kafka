@@ -2217,6 +2217,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @return true iff the operation completed without timing out
      */
     private boolean updateFetchPositions(final Timer timer) {
+        // 如果所有分区都有fetch的 position位置，那么就不需要发送fetch offset请求,即便此时有coordinator切换
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
         if (cachedSubscriptionHashAllFetchPositions) return true;
 

@@ -47,17 +47,22 @@ public abstract class AbstractPartitionAssignor implements PartitionAssignor {
 
     @Override
     public Subscription subscription(Set<String> topics) {
+        // 除了stick分区分配策略，其他分区分配策略，通过join请求上报的订阅信息，只有使用的分区分配策略名(外面会组装)+订阅了哪些topic信息:<分区分配策略名,Subscription(List<订阅的topics>)>
+        // stick分区分配策略，上报的信息是：<分区分配策略名,Subscription(List<订阅的topics>，List<分配了哪些分区>)>
         return new Subscription(new ArrayList<>(topics));
     }
 
     @Override
     public Map<String, Assignment> assign(Cluster metadata, Map<String, Subscription> subscriptions) {
+        // 记录所有consumer订阅的topic
         Set<String> allSubscribedTopics = new HashSet<>();
         for (Map.Entry<String, Subscription> subscriptionEntry : subscriptions.entrySet())
             allSubscribedTopics.addAll(subscriptionEntry.getValue().topics());
 
+        // 记录每个topic有多少分区
         Map<String, Integer> partitionsPerTopic = new HashMap<>();
         for (String topic : allSubscribedTopics) {
+            // 从元数据中获取该topic的分区数
             Integer numPartitions = metadata.partitionCountForTopic(topic);
             if (numPartitions != null && numPartitions > 0)
                 partitionsPerTopic.put(topic, numPartitions);
@@ -65,12 +70,15 @@ public abstract class AbstractPartitionAssignor implements PartitionAssignor {
                 log.debug("Skipping assignment for topic {} since no metadata is available", topic);
         }
 
+        // 根据每个topic有多少分区以及订阅信息和分配信息(stick才有每个成员的分配信息)计算出新的分配方案
         Map<String, List<TopicPartition>> rawAssignments = assign(partitionsPerTopic, subscriptions);
 
+        // 将分配结果再封装下：Map<String, List<TopicPartition>> -> Map<String, Assignment(partitions,userData)>
         // this class maintains no user data, so just wrap the results
         Map<String, Assignment> assignments = new HashMap<>();
         for (Map.Entry<String, List<TopicPartition>> assignmentEntry : rawAssignments.entrySet())
             assignments.put(assignmentEntry.getKey(), new Assignment(assignmentEntry.getValue()));
+        // 返回计算出的分配方案
         return assignments;
     }
 

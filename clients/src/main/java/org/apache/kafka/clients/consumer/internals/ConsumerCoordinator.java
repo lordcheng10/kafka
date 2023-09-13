@@ -376,23 +376,33 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     protected Map<String, ByteBuffer> performAssignment(String leaderId,
                                                         String assignmentStrategy,
                                                         Map<String, ByteBuffer> allSubscriptions) {
+        // 根据分区分配策略找到对应的分区分配策略对象
         PartitionAssignor assignor = lookupAssignor(assignmentStrategy);
-        if (assignor == null)
+        if (assignor == null)// 如果没有，那么就抛异常: Coordinator选择了一个错误的分区分配策略(当前consumer没有配置该策略)
             throw new IllegalStateException("Coordinator selected invalid assignment protocol: " + assignmentStrategy);
 
+        // allSubscribedTopics记录所有consumer订阅的topic
         Set<String> allSubscribedTopics = new HashSet<>();
+        // subscriptions记录了每个consumer的订阅分配信息(每个consumer订阅了哪些topic、使用了哪些分配策略，以及每个分配策略对应分配的分区)
         Map<String, Subscription> subscriptions = new HashMap<>();
+        // 遍历所有consumer之前的分配信息(每个consumer订阅了哪些topic、使用了哪些分配策略，以及每个分配策略对应分配的分区)
         for (Map.Entry<String, ByteBuffer> subscriptionEntry : allSubscriptions.entrySet()) {
+            // 发序列化出该consumer 的订阅信息
             Subscription subscription = ConsumerProtocol.deserializeSubscription(subscriptionEntry.getValue());
+            // 将成员和订阅信息放入subscriptions
             subscriptions.put(subscriptionEntry.getKey(), subscription);
+            // 将订阅的topic全部放入allSubscribedTopics中
             allSubscribedTopics.addAll(subscription.topics());
         }
 
+        // 领导者将开始监视该组感兴趣的任何主题的更改，这确保所有元数据更改最终都会被看到
         // the leader will begin watching for changes to any of the topics the group is interested in,
         // which ensures that all metadata changes will eventually be seen
-        this.subscriptions.groupSubscribe(allSubscribedTopics);
-        metadata.setTopics(this.subscriptions.groupSubscription());
+        this.subscriptions.groupSubscribe(allSubscribedTopics);//leader将所有成员订阅过的topic全部记录起来
+        metadata.setTopics(this.subscriptions.groupSubscription());// 将所有成员订阅的topic列表放入metadata中
 
+        // 更新元数据（如果需要）并跟踪用于分配的元数据，以便我们可以在重新平衡完成后检查是否有任何更改
+        // 如果需要更新元数据(比如扩分区了)，那么这里必须死等元数据更新完成
         // update metadata (if needed) and keep track of the metadata used for assignment so that
         // we can check after rebalance completion whether anything has changed
         if (!client.ensureFreshMetadata(time.timer(Long.MAX_VALUE))) throw new TimeoutException();
@@ -401,8 +411,11 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
 
         log.debug("Performing assignment using strategy {} with subscriptions {}", assignor.name(), subscriptions);
 
+        // 根据当前的集群元数据信息（包含topic有哪些分区的信息）和 subscriptions（记录了每个consumer的订阅信息）
         Map<String, Assignment> assignment = assignor.assign(metadata.fetch(), subscriptions);
 
+        // 用户自定义的分配者可能创建了一些不在订阅列表中的topic，并将其分区分配给成员；
+        // 在这种情况下，我们希望使用新添加的主题来更新领导者自己的元数据，以便当这些主题从元数据刷新更新时不会触发后续的重新平衡
         // user-customized assignor may have created some topics that are not in the subscription list
         // and assign their partitions to the members; in this case we would like to update the leader's
         // own metadata with the newly added topics so that it will not trigger a subsequent rebalance
@@ -410,18 +423,22 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
         //
         // TODO: this is a hack and not something we want to support long-term unless we push regex into the protocol
         //       we may need to modify the PartitionAssignor API to better support this case.
+        // 统计所有分配到的topic
         Set<String> assignedTopics = new HashSet<>();
         for (Assignment assigned : assignment.values()) {
             for (TopicPartition tp : assigned.partitions())
                 assignedTopics.add(tp.topic());
         }
 
+        // 如果计算分配的topic，没有全部包含订阅的topic，那么输出一个warn日志
         if (!assignedTopics.containsAll(allSubscribedTopics)) {
             Set<String> notAssignedTopics = new HashSet<>(allSubscribedTopics);
             notAssignedTopics.removeAll(assignedTopics);
             log.warn("The following subscribed topics are not assigned to any members: {} ", notAssignedTopics);
         }
 
+        // 如果订阅的topic，没有全部包含计算分配的topic(计算出的topic变多了，就是上面注释说的那种情况，用户自己写的分配策略，
+        // 加了新的topic，那么这里需要重新请求新topic的metadata，并放入group订阅的topic列表中，防止后面触发rebalance)
         if (!allSubscribedTopics.containsAll(assignedTopics)) {
             Set<String> newlyAddedTopics = new HashSet<>(assignedTopics);
             newlyAddedTopics.removeAll(allSubscribedTopics);
@@ -434,10 +451,12 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             if (!client.ensureFreshMetadata(time.timer(Long.MAX_VALUE))) throw new TimeoutException();
         }
 
+        // 将topic元数据(有哪些topic)做一个备份
         assignmentSnapshot = metadataSnapshot;
 
         log.debug("Finished assignment for group: {}", assignment);
 
+        // 将每个consumer对应的分配方案序列化
         Map<String, ByteBuffer> groupAssignment = new HashMap<>();
         for (Map.Entry<String, Assignment> assignmentEntry : assignment.entrySet()) {
             ByteBuffer buffer = ConsumerProtocol.serializeAssignment(assignmentEntry.getValue());

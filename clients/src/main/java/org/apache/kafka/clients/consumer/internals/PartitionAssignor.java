@@ -50,6 +50,10 @@ public interface PartitionAssignor {
     Subscription subscription(Set<String> topics);
 
     /**
+     * 根据成员订阅和当前集群元数据执行组分配。
+     * @param metadata 消费者已知的当前主题/代理元数据
+     * @param subscriptions 所有会员通过 {@link #subscription(Set)} 提供的订阅
+     * @return 成员到各自任务的map。 对于输入订阅映射中的所有成员，这应该有一个条目。
      * Perform the group assignment given the member subscriptions and current cluster metadata.
      * @param metadata Current topic/broker metadata known by consumer
      * @param subscriptions Subscriptions from all members provided through {@link #subscription(Set)}
@@ -75,7 +79,7 @@ public interface PartitionAssignor {
     class Subscription {
         // 订阅了哪些topic
         private final List<String> topics;
-        // 当前consumer负责哪些分区
+        // 当前consumer每个订阅策略对应哪些分区
         private final ByteBuffer userData;
 
         public Subscription(List<String> topics, ByteBuffer userData) {
