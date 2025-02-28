@@ -148,7 +148,7 @@ class PeriodicTaskControlManager {
         Time time,
         QueueAccessor queueAccessor
     ) {
-        this.log = logContext.logger(OffsetControlManager.class);
+        this.log = logContext.logger(PeriodicTaskControlManager.class);
         this.time = time;
         this.queueAccessor = queueAccessor;
         this.active = false;
@@ -206,7 +206,7 @@ class PeriodicTaskControlManager {
             long nextDelayTimeNs = nextDelayTimeNs(task, immediate, error);
             long nextRunTimeNs = time.nanoseconds() + nextDelayTimeNs;
             log.trace("rescheduling {} in {} ns (immediate = {}, error = {})",
-                    task.name(), nextDelayTimeNs, immediate);
+                    task.name(), nextDelayTimeNs, immediate, error);
             queueAccessor.scheduleDeferred(task.name(),
                     nextRunTimeNs,
                     new PeriodicTaskOperation(task));

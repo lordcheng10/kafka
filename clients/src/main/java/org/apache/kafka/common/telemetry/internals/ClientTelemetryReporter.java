@@ -42,6 +42,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -340,6 +341,10 @@ public class ClientTelemetryReporter implements MetricsReporter {
                 case TERMINATING_PUSH_IN_PROGRESS:
                     timeMs = Long.MAX_VALUE;
                     log.trace("For telemetry state {}, returning the value {} ms; the terminating push is in progress, disabling telemetry for further requests", localState, timeMs);
+                    break;
+                case TERMINATED:
+                    timeMs = Long.MAX_VALUE;
+                    log.trace("For telemetry state {}, returning the value {} ms; telemetry is terminated, no further requests will be made", localState, timeMs);
                     break;
                 case TERMINATING_PUSH_NEEDED:
                     timeMs = 0;
@@ -710,12 +715,12 @@ public class ClientTelemetryReporter implements MetricsReporter {
             }
 
             CompressionType compressionType = ClientTelemetryUtils.preferredCompressionType(localSubscription.acceptedCompressionTypes());
-            byte[] compressedPayload;
+            ByteBuffer compressedPayload;
             try {
                 compressedPayload = ClientTelemetryUtils.compress(payload, compressionType);
             } catch (IOException e) {
                 log.info("Failed to compress telemetry payload for compression: {}, sending uncompressed data", compressionType);
-                compressedPayload = payload.toByteArray();
+                compressedPayload = ByteBuffer.wrap(payload.toByteArray());
                 compressionType = CompressionType.NONE;
             }
 
